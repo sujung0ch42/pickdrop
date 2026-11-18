@@ -69,6 +69,10 @@
     draft,
     decision = null,
     poll = null,
+    ownedPolls = [],
+    pollsLoading = false,
+    pollsError = false,
+    morePolls = false,
     current = null,
     vote = "",
     ballot = null,
@@ -772,7 +776,12 @@
       ) +
       "</section>";
     return (
-      header(ended ? "투표 종료!" : "아직 진행 중이에요") +
+      header(ended ? "투표 종료!" : "아직 진행 중이에요", {
+        back: poll.demo ? null : "my-polls",
+      }) +
+      (poll.demo
+        ? ""
+        : '<p class="owned-poll-topic">' + esc(poll.topic) + "</p>") +
       (ended && top.length
         ? muted("우리의 선택은...") +
           (top.length === 1
@@ -805,6 +814,9 @@
           ) +
           action("새 고민", "start") +
           "</div>",
+        ended && !poll.demo
+          ? action("투표 링크 복사", "copy", "", "text-button")
+          : "",
       )
     );
   }
@@ -841,7 +853,7 @@
         ? muted(user.email) +
           '<div class="account-actions">' +
           action("내 선택 기록", "history") +
-          action("최근에 만든 투표", "recentpoll", "", "secondary") +
+          action("내가 만든 투표", "my-polls", "", "secondary") +
           action("로그아웃", "logout", "", "secondary") +
           "</div>"
         : muted(
@@ -852,6 +864,114 @@
           ))
     );
   }
+  const pollDeadlineFormat = new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const pollsPageSize = 20;
+
+  function pollsPage() {
+    const rows = ownedPolls
+      .map((item) => {
+        const ended = new Date(item.expires_at) <= new Date();
+        return action(
+          '<span class="poll-row"><strong>' +
+            esc(item.topic) +
+            "</strong><small>" +
+            esc(pollDeadlineFormat.format(new Date(item.expires_at))) +
+            " 마감</small></span>" +
+            '<span class="poll-state' +
+            (ended ? " ended" : "") +
+            '">' +
+            (ended ? "마감" : "진행 중") +
+            "</span>",
+          "open-poll",
+          'data-id="' + esc(item.id) + '"',
+          "secondary poll-list-item",
+        );
+      })
+      .join("");
+    return (
+      header("내가 만든 투표", { back: "account" }) +
+      (rows ? '<div class="poll-list">' + rows + "</div>" : "") +
+      (pollsLoading
+        ? '<p class="muted" role="status">투표를 불러오는 중이에요…</p>'
+        : pollsError
+          ? muted("투표 목록을 불러오지 못했어요.") +
+            action(
+              "다시 시도",
+              ownedPolls.length ? "more-polls" : "my-polls",
+              "",
+              "secondary",
+            )
+          : !rows
+            ? muted("아직 만든 투표가 없어요.")
+            : morePolls
+              ? action("더 보기", "more-polls", "", "secondary more-polls")
+              : "") +
+      footer(action("새 투표 만들기", "friend"))
+    );
+  }
+
+  async function loadOwnedPolls(append = false) {
+    const owner = user?.id;
+    if (!owner) return go("account");
+    if (!append) {
+      ownedPolls = [];
+      morePolls = false;
+    }
+    pollsLoading = true;
+    pollsError = false;
+    if (append) render();
+    else go("polls");
+    let query = supa
+      .from("polls")
+      .select("id,topic,created_at,expires_at")
+      .eq("owner_id", owner)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
+    const cursor = append ? ownedPolls.at(-1) : null;
+    if (cursor)
+      query = query.or(
+        "created_at.lt." +
+          cursor.created_at +
+          ",and(created_at.eq." +
+          cursor.created_at +
+          ",id.lt." +
+          cursor.id +
+          ")",
+      );
+    const { data, error } = await query.limit(pollsPageSize + 1);
+    if (user?.id !== owner || view !== "polls") return;
+    pollsLoading = false;
+    pollsError = Boolean(error);
+    if (!error) {
+      ownedPolls = [...ownedPolls, ...data.slice(0, pollsPageSize)];
+      morePolls = data.length > pollsPageSize;
+    }
+    render();
+  }
+
+  async function openOwnedPoll(key) {
+    const owner = user?.id;
+    if (!owner || !uuid.test(key)) return;
+    const { data, error } = await supa
+      .from("polls")
+      .select("id,topic,options,expires_at")
+      .eq("id", key)
+      .eq("owner_id", owner)
+      .maybeSingle();
+    if (user?.id !== owner || view !== "polls") return;
+    if (error) return toast("투표를 열지 못했어요. 다시 시도해 주세요.");
+    if (!data) {
+      ownedPolls = ownedPolls.filter((item) => item.id !== key);
+      render();
+      return toast("이 투표를 찾을 수 없어요.");
+    }
+    poll = { ...data, demo: false };
+    await statsLoad();
+  }
+
   function historypage() {
     return (
       header("내 선택 기록", { back: "home" }) +
@@ -891,6 +1011,7 @@
       stats,
       notes: inbox,
       account,
+      polls: pollsPage,
       history: historypage,
       wizard: () => [one, two, four][step - 1](),
     }[view]();
@@ -1090,11 +1211,15 @@
     }
     if (poll.demo) votes = read("votes", {})[poll.id] || [];
     else {
+      const owner = user.id;
+      const selected = poll.id;
       const { data, error } = await supa
         .from("votes")
         .select("option_id,note,voter_name,created_at")
-        .eq("poll_id", poll.id);
-      if (error) return toast(error.message);
+        .eq("poll_id", selected);
+      if (user?.id !== owner || poll?.id !== selected) return;
+      if (error)
+        return toast("투표 결과를 불러오지 못했어요. 다시 시도해 주세요.");
       votes = data || [];
     }
     go("stats");
@@ -1558,21 +1683,10 @@
       } else if (a === "cast") await cast();
       else if (a === "stats") await statsLoad();
       else if (a === "notes") go("notes");
-      else if (a === "recentpoll" && user) {
-        const owner = user.id;
-        const { data, error } = await supa
-          .from("polls")
-          .select("*")
-          .eq("owner_id", owner)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (user?.id !== owner) return;
-        if (error) return toast("최근 투표를 불러오지 못했어요.");
-        if (!data) return toast("아직 만든 투표가 없어요.");
-        poll = { ...data, demo: false };
-        await statsLoad();
-      } else if (a === "history") go("history");
+      else if (a === "my-polls") await loadOwnedPolls();
+      else if (a === "more-polls") await loadOwnedPolls(true);
+      else if (a === "open-poll") await openOwnedPoll(t.dataset.id);
+      else if (a === "history") go("history");
       else if (a === "reloadhistory" && user) await loadHistory(user.id);
       else if (a === "openhistory") {
         decision = records[index];
@@ -1613,6 +1727,10 @@
       authReady = true;
       records = user ? [] : read("history", []);
       if (old) {
+        ownedPolls = [];
+        morePolls = false;
+        pollsError = false;
+        pollsLoading = false;
         decision = null;
         poll = null;
         if (!["home", "vote"].includes(view)) go("home");

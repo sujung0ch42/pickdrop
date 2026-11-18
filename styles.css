@@ -897,3 +897,44 @@ fieldset .scale {
 .own-note p {
   white-space: pre-wrap;
 }
+.poll-list {
+  display: grid;
+  gap: 8px;
+}
+.poll-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  text-align: left;
+}
+.poll-row {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.poll-row small {
+  font-size: 12px;
+  color: var(--gray);
+  font-weight: 400;
+}
+.poll-state {
+  border-radius: 100px;
+  padding: 2px 9px;
+  background: #e7f2df;
+  color: #34572e;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+.poll-state.ended {
+  background: var(--light);
+  color: var(--gray);
+}
+.more-polls {
+  margin-top: 12px;
+}
+.owned-poll-topic {
+  color: var(--gray);
+  font-weight: 500;
+}
