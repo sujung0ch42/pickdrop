@@ -12,10 +12,27 @@
     },
   );
   const PRESETS = {
-    food: ["음식 자판기", ["맛", "가격", "거리", "양"]],
-    shopping: ["쇼핑 자판기", ["가격", "활용도", "디자인", "품질"]],
-    leisure: ["여가 자판기", ["비용", "피로도", "재미", "시간"]],
-    custom: ["직접 만들기", ["만족도", "실용성", "가격", "편의성"]],
+    food: {
+      label: "음식 고민",
+      icon: "IconFood",
+      criteria: ["가격", "건강", "땡긴다", "품질"],
+    },
+    shopping: {
+      label: "쇼핑 고민",
+      icon: "IconShopping",
+      criteria: ["가격", "활용도", "디자인", "품질"],
+    },
+    leisure: {
+      label: "여가 고민",
+      icon: "IconPlay",
+      criteria: ["비용", "피로도", "재미", "시간"],
+    },
+    pair: {
+      label: "둘 중 하나",
+      icon: "IconScale",
+      criteria: ["비용", "거리", "효율"],
+    },
+    custom: { label: "직접 만들기", icon: "IconPlus", criteria: [] },
   };
   const $ = document.getElementById("page"),
     esc = (x) =>
@@ -44,10 +61,11 @@
     pending = false,
     historyError = false,
     pollError = false,
-    showResult = false,
-    friendFlow = false,
     view = "home",
     step = 1,
+    criterionIndex = 0,
+    optionIndex = 0,
+    compareIds = [],
     draft,
     decision = null,
     poll = null,
@@ -56,50 +74,39 @@
     note = "",
     voter = "",
     votes = [],
-    deadline = "today",
+    deadline = "",
     records = read("history", []),
     loading = false;
   const fresh = () => ({
     title: "",
-    cat: "shopping",
-    criteria: ["가격", "활용도", "디자인"],
-    options: [
-      { id: id(), name: "" },
-      { id: id(), name: "" },
-    ],
+    cat: "",
+    criteria: [],
+    weights: {},
+    options: [],
     ratings: {},
+    comparisons: {},
   });
-  draft = read("draft", fresh());
-  const btn = (name, act = "next", kind = "") =>
-    '<button class="btn ' +
-    kind +
-    '" data-act="' +
-    act +
-    '">' +
-    name +
-    "</button>";
-  const stephead = (name, n) =>
-    '<div class="stepTop"><h1>' +
-    name +
-    "</h1><span>" +
-    n +
-    '/5</span></div><div class="progress"><div style="width:' +
-    n * 20 +
-    '%"></div></div>';
+  draft = fresh();
   const go = (v) => {
     view = v;
     render();
     window.scrollTo(0, 0);
   };
-  const mark = (v) => {
-    draft = v;
-    save("draft", draft);
-    render();
-  };
   const status = document.getElementById("status");
-  const toast = (message) => {
-    status.textContent = message;
+  let toastTimer;
+  const toast = (message, kind = "error") => {
+    (dialog.open ? dialog : document.body).append(status);
+    status.className = kind;
+    status.querySelector("span").textContent = message;
+    status.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      status.hidden = true;
+    }, 4500);
   };
+  status.querySelector("button").addEventListener("click", () => {
+    status.hidden = true;
+  });
   const pollLink = (key) => {
     const url = new URL(location.pathname, location.origin);
     url.searchParams.set("poll", key);
@@ -107,8 +114,6 @@
   };
   const uuid =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const optionRow = (label, selected = false, key = null) =>
-    `<${key === null ? "div" : "button"} class="voteopt ${selected ? "active" : ""}" ${key === null ? "" : `data-act="voteselect" data-id="${esc(key)}" aria-pressed="${selected}"`}><b>${esc(label)}</b><span aria-hidden="true">${selected ? "✓" : ""}</span></${key === null ? "div" : "button"}>`;
   const tie = (result) =>
     result.ranking.filter(
       (option) => option.weighted === result.ranking[0].weighted,
@@ -163,83 +168,192 @@
     save("history", records);
   }
 
+  const durations = { 1: "1시간", 12: "12시간", 24: "24시간", 168: "일주일" };
+  const palettes = ["pink", "orange", "green", "blue"];
+  const icon = (name) =>
+    '<img class="icon" src="/assets/img' + name + '.svg" alt="">';
+  const action = (label, name, attrs = "", style = "") =>
+    '<button type="button" class="button ' +
+    style +
+    '" data-act="' +
+    name +
+    '" ' +
+    attrs +
+    ">" +
+    label +
+    "</button>";
+  const footer = (...buttons) =>
+    '<div class="bottom">' + buttons.join("") + "</div>";
+  const header = (title, { back = null, stepLabel = "", progress = 0 } = {}) =>
+    '<header class="screen-header">' +
+    (back
+      ? action(icon("IconBack"), back, 'aria-label="뒤로"', "icon-button")
+      : "") +
+    "<h1>" +
+    esc(title) +
+    "</h1>" +
+    (stepLabel ? "<span>" + esc(stepLabel) + "</span>" : "") +
+    "</header>" +
+    (progress
+      ? '<div class="progress" role="progressbar" aria-valuenow="' +
+        progress +
+        '"><div style="width:' +
+        progress +
+        '%"></div></div>'
+      : "");
+  const input = (label, key, value, placeholder, max) =>
+    '<label class="field">' +
+    esc(label) +
+    '<input data-in="' +
+    key +
+    '" value="' +
+    esc(value) +
+    '" placeholder="' +
+    esc(placeholder) +
+    '" maxlength="' +
+    max +
+    '"></label>';
+  const muted = (value) => '<p class="muted">' + esc(value) + "</p>";
+  const validPhoto = (value) =>
+    typeof value === "string" &&
+    /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(value);
+  const color = (option, index) =>
+    palettes.includes(option.color)
+      ? option.color
+      : palettes[index % palettes.length];
+  function card(
+    option,
+    index,
+    { act, selected = false, add = false, large = false } = {},
+  ) {
+    const cls =
+      "card " +
+      color(option, index) +
+      (selected ? " selected" : "") +
+      (add ? " add" : "") +
+      (large ? " large" : "");
+    const content =
+      (validPhoto(option.photo)
+        ? '<img class="candidate-photo" src="' + option.photo + '" alt="">'
+        : "") +
+      "<span>" +
+      esc(option.label ?? option.name) +
+      "</span>";
+    return act
+      ? '<button type="button" class="' +
+          cls +
+          '" data-act="' +
+          act +
+          '" data-i="' +
+          index +
+          '"' +
+          (act === "voteselect" ? ' aria-pressed="' + selected + '"' : "") +
+          ">" +
+          content +
+          "</button>"
+      : '<div class="' + cls + '">' + content + "</div>";
+  }
+  const addCard = (index, name = "+ 추가하기", blank = true, tint = "pink") =>
+    card({ name, color: tint }, index, { act: "candidate", add: blank });
+  const rankList = (options) =>
+    '<ol class="ranks">' +
+    options
+      .map(
+        ({ rank, label, name }) =>
+          "<li><span>" + rank + "위</span>" + esc(label ?? name) + "</li>",
+      )
+      .join("") +
+    "</ol>";
+  const pick = (option, index, caption = "") =>
+    '<div class="winner"><div class="pick-card">' +
+    card(option, index) +
+    '<span class="stamp">Pick!</span></div>' +
+    '<div class="winner-name"><small>PICKDROP</small>' +
+    (caption ? "<small>" + caption + "</small>" : "") +
+    "<strong>" +
+    esc(option.name ?? option.label) +
+    "</strong></div></div>";
+  const optionsReady = () =>
+    draft.options.length >= 2 &&
+    draft.options.every((option) => option.name.trim());
+  const pollReady = () =>
+    Boolean(draft.title.trim() && optionsReady() && deadline);
+  const descriptor = () =>
+    [PRESETS[draft.cat]?.label, draft.title].filter(Boolean).join(" · ");
+
   function home() {
+    const logo = [1, 2, 3, 4, 5]
+      .map((n) => '<img src="/assets/imgColor' + n + '.svg" alt="">')
+      .join("");
     return (
-      '<span class="heroTag">HEY, DECIDE!</span><h1 class="hero">고민은 넣고,<br>선택은 뽑고.</h1><p class="sub">결정이 어려울 땐 자판기를 돌려봐요.<br>내 기준으로 비교하고 친구 의견도 받아보세요.</p><div class="machine"><div class="machineTop"><b>PICK MACHINE</b><span>01 / SELECT</span></div><div class="machineGrid"><button class="product" data-act="start"><small>01</small><strong>나 혼자<br>결정</strong><small>MY CHOICE ↗</small></button><button class="product" data-act="friend"><small>02</small><strong>친구에게<br>묻기</strong><small>ASK FRIENDS ↗</small></button></div><div class="slot"></div></div><button class="tile" data-act="start">개인 선택 <span class="arrow">↗</span></button><button class="tile" data-act="friend">친구 의견 받기 <span class="arrow">↗</span></button><div class="subhead">최근 고민</div>' +
-      (records.length
-        ? records
-            .slice(0, 3)
-            .map(
-              (r, i) =>
-                '<button class="tile" data-act="openhistory" data-i="' +
-                i +
-                '">' +
-                esc(r.title) +
-                "<small>" +
-                esc(winnerLabel(r)) +
-                "</small></button>",
-            )
-            .join("")
-        : '<div class="notice">아직 뽑은 고민이 없어요.</div>') +
-      '<button class="link" data-act="history">전체 기록 보기 →</button>'
+      '<div class="home"><div class="logo-stack" aria-hidden="true">' +
+      logo +
+      '</div><img class="wordmark" src="/assets/imgPickdrop.svg" alt="PICKDROP">' +
+      '<div class="home-actions">' +
+      action(
+        icon("IconPerson") + "나 혼자 결정하기",
+        "start",
+        "",
+        "home-button",
+      ) +
+      action(icon("Group") + "친구에게 물어보기", "friend", "", "home-button") +
+      "</div>" +
+      '<div class="home-account">' +
+      action(
+        authReady && user ? "마이페이지" : "로그인",
+        "account",
+        authReady ? "" : "disabled",
+        "text-button",
+      ) +
+      action("선택 기록", "history", "", "text-button") +
+      "</div></div>"
     );
   }
+
   function one() {
-    const labels = {
-      food: "음식",
-      shopping: "쇼핑",
-      leisure: "여가",
-      custom: "직접",
-    };
-    const title =
-      '<label class="field" for="decision-title">무엇을 고민하나요?</label>' +
-      '<input id="decision-title" class="input" data-in="title" maxlength="100" placeholder="예: 옷 세 벌 중 뭘 살까?" value="' +
-      esc(draft.title) +
-      '">';
-    if (friendFlow)
-      return (
-        '<div class="stepTop"><h1>친구에게 물어보기</h1><span>1/2</span></div>' +
-        title +
-        foot()
-      );
-    const presets = Object.entries(PRESETS)
-      .map(([key, [name, criteria]]) => {
-        const selected = draft.cat === key;
+    const choices = Object.entries(PRESETS)
+      .map(([key, entry]) => {
+        const active = key === draft.cat;
+        const chips = draft.criteria
+          .map(
+            (criterion, index) =>
+              '<span class="criterion"><button type="button" data-act="criterion" data-i="' +
+              index +
+              '">' +
+              esc(criterion) +
+              '</button><button type="button" aria-label="' +
+              esc(criterion) +
+              ' 삭제" data-act="criteria-remove" data-i="' +
+              index +
+              '">×</button></span>',
+          )
+          .join("");
+        const additions = entry.criteria.find(
+          (name) => !draft.criteria.includes(name),
+        );
         return (
           '<div class="preset' +
-          (selected ? " active" : "") +
+          (active ? " active" : "") +
           '">' +
-          '<button class="presetButton" aria-pressed="' +
-          selected +
-          '" data-act="cat" data-val="' +
-          key +
-          '">' +
-          "<span>" +
-          labels[key] +
-          "</span><strong>" +
-          name +
-          "</strong>" +
-          (selected ? "" : "<small>" + criteria.join(" · ") + "</small>") +
-          "</button>" +
-          (selected
-            ? '<div class="presetCriteria"><p>비교할 기준 (눌러서 빼기 · 최대 4개)</p><div class="chips">' +
-              criteria
-                .map((criterion) => {
-                  const active = draft.criteria.includes(criterion);
-                  return (
-                    '<button class="chip ' +
-                    (active ? "selected" : "") +
-                    '" aria-pressed="' +
-                    active +
-                    '" data-act="crit" data-val="' +
-                    esc(criterion) +
-                    '">' +
-                    esc(criterion) +
-                    (active ? " ×" : " +") +
-                    "</button>"
-                  );
-                })
-                .join("") +
+          action(
+            icon(entry.icon) + esc(entry.label),
+            "cat",
+            'data-val="' + key + '" aria-pressed="' + active + '"',
+            "preset-button",
+          ) +
+          (active
+            ? '<div class="preset-detail"><p>비교할 기준 ' +
+              (key === "custom" ? "만들기" : "선택하기") +
+              ' · 수정하기</p><div class="chips">' +
+              chips +
+              (draft.criteria.length < 6
+                ? action(
+                    "+ " + esc(additions ?? "기준"),
+                    "criterion",
+                    'data-suggestion="' + esc(additions ?? "") + '"',
+                    "chip dashed",
+                  )
+                : "") +
               "</div></div>"
             : "") +
           "</div>"
@@ -247,450 +361,571 @@
       })
       .join("");
     return (
-      stephead("새 고민", 1) +
-      title +
-      '<h2 class="presetHeading">어떤 자판기인가요?</h2>' +
-      presets +
-      foot()
+      header("새 고민", { back: "home", stepLabel: "1/4", progress: 25 }) +
+      input(
+        "무엇을 고민하나요? (선택)",
+        "title",
+        draft.title,
+        "고민을 입력하세요!",
+        100,
+      ) +
+      '<h2 class="form-heading">양식 고르기 (필수)</h2><div class="presets">' +
+      choices +
+      "</div>" +
+      footer(
+        action(
+          "다음",
+          "next",
+          draft.cat && draft.criteria.length ? "" : "disabled",
+        ),
+      )
     );
   }
+
   function two() {
+    const pair = draft.cat === "pair";
+    const candidates = draft.options
+      .map((option, index) =>
+        option.name
+          ? card(option, index, { act: "candidate" })
+          : addCard(index, "+ 후보 넣기", false, index ? "blue" : "pink"),
+      )
+      .join("");
     return (
-      (friendFlow
-        ? '<div class="stepTop"><h1>후보 넣기</h1><span>2/2</span></div>'
-        : stephead("자판기에 후보 넣기", 2)) +
-      '<p class="sub">' +
-      esc(draft.title) +
-      ' · 후보를 2~4개 넣어 주세요.</p><div class="options">' +
+      header("후보 넣기", {
+        back: "back",
+        stepLabel: pair ? "2/5" : "2/4",
+        progress: 50,
+      }) +
+      (pair
+        ? "<h2>둘 중 하나는 후보가 딱 2개예요!</h2>" +
+          muted("카드를 눌러 이름과 사진을 바꿔요. 후보 추가 칸은 없어요.")
+        : muted(descriptor())) +
+      '<div class="card-grid' +
+      (pair ? " pair-grid" : "") +
+      '">' +
+      candidates +
+      (!pair && draft.options.length < 4 ? addCard(draft.options.length) : "") +
+      "</div>" +
+      footer(action("다음", "next", optionsReady() ? "" : "disabled"))
+    );
+  }
+
+  function scale(value, act, pair = false) {
+    return (
+      '<div class="scale' +
+      (pair ? " pair-scale" : "") +
+      '">' +
+      [1, 2, 3, 4, 5]
+        .map((n) =>
+          action(
+            pair ? "" : String(n),
+            act,
+            'data-n="' +
+              n +
+              '" aria-label="' +
+              (pair
+                ? [
+                    "왼쪽이 훨씬 나아요",
+                    "왼쪽이 더 나아요",
+                    "비슷해요",
+                    "오른쪽이 더 나아요",
+                    "오른쪽이 훨씬 나아요",
+                  ][n - 1]
+                : n + "점") +
+              '" aria-pressed="' +
+              (value === n) +
+              '"',
+            "dot dot-" + n,
+          ),
+        )
+        .join("") +
+      "</div>"
+    );
+  }
+  const scoreKey = () =>
+    draft.options[optionIndex].id + "|" + draft.criteria[criterionIndex];
+  function four() {
+    const pair = draft.cat === "pair";
+    const criterion = draft.criteria[criterionIndex];
+    const selected = pair
+      ? draft.comparisons[criterion]
+      : draft.ratings[scoreKey()];
+    return (
+      header("점수 매기기", {
+        back: "back",
+        stepLabel: pair
+          ? criterionIndex + 2 + "/" + (draft.criteria.length + 3)
+          : "3/4",
+        progress: 75,
+      }) +
+      '<h2>이번 기준은?</h2><h3 class="score-heading">' +
+      esc(criterion) +
+      "!</h3>" +
+      (pair
+        ? muted("기준 중심으로, 더 나은 선택지를 고르세요") +
+          '<div class="card-grid pair-grid scoring">' +
+          draft.options.map((option, i) => card(option, i)).join("") +
+          "</div>"
+        : '<div class="score-window"><div class="score-cards" style="--index:' +
+          optionIndex +
+          '">' +
+          draft.options
+            .map((option, i) => card(option, i, { large: true }))
+            .join("") +
+          "</div></div>") +
+      scale(selected, "score", pair) +
+      footer(action("다음", "next", selected ? "" : "disabled"))
+    );
+  }
+
+  function result() {
+    if (!decision)
+      return header("결과가 나왔어요") + footer(action("홈으로", "home"));
+    const chosen = winner(decision);
+    const tied = tie(decision);
+    const index = (option) =>
+      Math.max(
+        0,
+        decision.options.findIndex((entry) => entry.id === option.id),
+      );
+    const ranks = decision.ranking.filter((option) =>
+      chosen ? option.id !== chosen.id : !tied.includes(option),
+    );
+    const pair = decision.category === "pair";
+    return (
+      header("결과가 나왔어요", { stepLabel: "4/4", progress: 100 }) +
+      ('<div class="result-caption">' +
+        muted("나의 선택은...") +
+        action("결과 저장", "save", "", "text-button") +
+        "</div>") +
+      (!chosen
+        ? '<h2>공동 1등이에요!</h2><div class="winner ties">' +
+          tied.map((option) => card(option, index(option))).join("") +
+          "</div>"
+        : pair
+          ? '<div class="winner pair-winner"><div class="pick-card">' +
+            card(chosen, index(chosen), { large: true }) +
+            '<span class="stamp">Pick!</span></div>' +
+            ranks.map((option) => card(option, index(option))).join("") +
+            "</div>"
+          : pick(chosen, index(chosen), "1위")) +
+      (!pair
+        ? '<section class="result-ranks"><h2>다른 후보 순위</h2>' +
+          muted("다음 기회에") +
+          rankList(ranks.map((option, i) => ({ ...option, rank: i + 2 }))) +
+          "</section>"
+        : "") +
+      footer(
+        '<div class="split">' +
+          action(
+            chosen ? "다시 뽑기" : "두 개만 비교하기",
+            chosen ? "rescore" : "compare-tie",
+            "",
+            "secondary",
+          ) +
+          action("새 고민", "start") +
+          "</div>",
+        action("친구에게도 물어보기 →", "makepoll", "", "text-button"),
+      )
+    );
+  }
+
+  function setup() {
+    return (
+      header("친구에게 물어보기", {
+        back: "setup-back",
+        stepLabel: "1/2",
+        progress: 50,
+      }) +
+      input(
+        "무엇을 물어볼까요?",
+        "title",
+        draft.title,
+        "투표 제목을 입력하세요!",
+        100,
+      ) +
+      '<h2 class="form-heading">후보 넣기</h2><div class="card-strip poll-options">' +
+      (draft.options.length < 4 ? addCard(draft.options.length) : "") +
       draft.options
+        .map((option, i) => card(option, i, { act: "candidate" }))
+        .join("") +
+      "</div>" +
+      '<h2 class="deadline-label">투표 마감</h2><div class="chips">' +
+      Object.entries(durations)
+        .map(([hours, label]) =>
+          action(
+            label,
+            "deadline",
+            'data-val="' +
+              hours +
+              '" aria-pressed="' +
+              (deadline === hours) +
+              '"',
+            "chip",
+          ),
+        )
+        .join("") +
+      "</div>" +
+      footer(
+        action(
+          "투표 링크 만들기",
+          user ? "createpoll" : "loginpoll",
+          pollReady() ? "" : "disabled",
+        ),
+        user
+          ? ""
+          : action(
+              "이 기기에서 미리 보기",
+              "createpoll",
+              pollReady() ? "" : "hidden",
+              "text-button",
+            ),
+      )
+    );
+  }
+  const linkbox = () =>
+    '<div class="link-box"><input aria-label="투표 링크" readonly value="' +
+    esc(pollLink(poll.id).href) +
+    '">' +
+    action(
+      icon("Group1"),
+      "copy",
+      'aria-label="투표 링크 복사"',
+      "icon-button",
+    ) +
+    "</div>";
+  const symbol = (value) =>
+    icon(value === "✓" ? "ShareSuccess" : "SharePending");
+  function share() {
+    return (
+      header("링크가 생성되었어요", {
+        back: "setup-back",
+        stepLabel: "2/2",
+        progress: 100,
+      }) +
+      '<section class="share-message">' +
+      symbol("✓") +
+      "<h2>친구에게 공유하세요</h2>" +
+      muted(
+        poll.demo
+          ? "이 기기에서만 열리는 미리보기 링크예요"
+          : "로그인 없이 링크만 누르면 투표할 수 있어요",
+      ) +
+      "</section>" +
+      linkbox() +
+      footer(
+        action("결과 확인하기", "stats"),
+        poll.demo
+          ? action("투표 화면 미리 보기", "visit", "", "text-button")
+          : "",
+      )
+    );
+  }
+  function publicvote() {
+    if (loading)
+      return header("투표") + '<p class="center">투표를 불러오는 중...</p>';
+    if (pollError)
+      return (
+        header("투표") +
+        '<p class="center">투표를 불러오지 못했어요.</p>' +
+        footer(action("다시 시도", "retryvote"))
+      );
+    if (!current)
+      return (
+        header("투표") +
+        '<p class="center">투표를 찾을 수 없습니다.</p>' +
+        footer(action("홈으로", "home"))
+      );
+    const voted = read("voted_" + current.id, false);
+    if (voted) {
+      const selected = current.options.find((option) => option.id === voted);
+      const localRanks = current.demo
+        ? pollRanks(current, read("votes", {})[current.id] ?? [])
+        : [];
+      return (
+        header("투표 완료!", { progress: 100 }) +
+        (selected
+          ? muted("내가 고른 후보") +
+            pick(selected, current.options.indexOf(selected))
+          : muted("의견을 전달했어요.")) +
+        (localRanks.length
+          ? '<section class="result-ranks"><h2>전체 후보 순위</h2>' +
+            rankList(localRanks) +
+            "</section>"
+          : "") +
+        footer(action("나도 고민 올리기", "home"))
+      );
+    }
+    if (new Date(current.expires_at) <= new Date())
+      return (
+        header("투표 종료!") +
+        muted("마감된 투표예요.") +
+        footer(action("홈으로", "home"))
+      );
+    return (
+      header(
+        current.owner_name ? current.owner_name + " 님의 고민" : "친구의 고민",
+        { progress: 50 },
+      ) +
+      '<h3 class="poll-topic">' +
+      esc(current.topic) +
+      '</h3><p class="photo-help">옆으로 넘기면서 확인해요 · 사진을 클릭하면 크게 보여요</p>' +
+      '<div class="card-strip guest-options">' +
+      current.options
         .map(
-          (o, i) =>
-            '<div class="opt"><input data-in="option" data-id="' +
-            o.id +
-            '" maxlength="35" placeholder="후보 A' +
-            (i + 1) +
-            '" value="' +
-            esc(o.name) +
-            '"/><div class="pic">□</div>' +
-            (draft.options.length > 2
-              ? '<button data-act="remove" data-id="' + o.id + '">×</button>'
+          (option, i) =>
+            '<div class="guest-card">' +
+            card(option, i, {
+              act: "voteselect",
+              selected: vote === option.id,
+            }) +
+            (validPhoto(option.photo)
+              ? action(
+                  "",
+                  "photo",
+                  'data-i="' +
+                    i +
+                    '" aria-label="' +
+                    esc(option.label) +
+                    ' 사진 크게 보기"',
+                  "photo-target",
+                )
               : "") +
             "</div>",
         )
         .join("") +
-      (draft.options.length < 4
-        ? '<button class="btn secondary" data-act="add">+ 후보 넣기</button>'
-        : "") +
-      "</div>" +
-      foot()
-    );
-  }
-  function three() {
-    return (
-      stephead("중요한 순서", 3) +
-      '<h2>나에게 중요한 기준은?</h2><p class="sub">순서가 높을수록 점수에 크게 반영돼요.</p>' +
-      draft.criteria
-        .map(
-          (c, i) =>
-            '<div class="row"><b>' +
-            (i + 1) +
-            "</b><strong>" +
-            esc(c) +
-            "</strong><small>×" +
-            (draft.criteria.length - i) +
-            '</small><button class="round" data-act="move" data-i="' +
-            i +
-            '" data-d="-1">↑</button><button class="round" data-act="move" data-i="' +
-            i +
-            '" data-d="1">↓</button></div>',
-        )
-        .join("") +
-      foot()
-    );
-  }
-  function four() {
-    return (
-      stephead("점수 매기기", 4) +
-      '<h2>후보별 1~5점</h2><p class="sub">5점이 가장 좋아요.</p>' +
-      draft.options
-        .map(
-          (o, i) =>
-            '<div class="rating"><small>후보 A' +
-            (i + 1) +
-            "</small><h3>" +
-            esc(o.name) +
-            "</h3>" +
-            draft.criteria
-              .map(
-                (c, j) =>
-                  "<label>" +
-                  esc(c) +
-                  " · ×" +
-                  (draft.criteria.length - j) +
-                  '</label><div class="score">' +
-                  [1, 2, 3, 4, 5]
-                    .map(
-                      (n) =>
-                        '<button class="' +
-                        ((draft.ratings[o.id + "|" + c] || 3) === n
-                          ? "on"
-                          : "") +
-                        '" data-act="score" data-id="' +
-                        o.id +
-                        '" data-c="' +
-                        esc(c) +
-                        '" data-n="' +
-                        n +
-                        '">' +
-                        n +
-                        "</button>",
-                    )
-                    .join("") +
-                  "</div>",
-              )
-              .join("") +
-            "</div>",
-        )
-        .join("") +
-      foot("결과 뽑기")
-    );
-  }
-  function result() {
-    if (!decision) return '<div class="empty">결과가 없어요.</div>';
-    const r = decision;
-    const tied = tie(r);
-    if (tied.length > 1 && !r.chosenId)
-      return (
-        stephead("결과가 나왔어요", 5) +
-        '<div class="winner tie"><small>출구</small><strong>동점이에요!</strong><div class="tieCards">' +
-        tied
-          .map(
-            (option) =>
-              "<article><b>" +
-              esc(option.name) +
-              "</b><p>" +
-              option.score +
-              "점</p></article>",
-          )
-          .join("") +
-        "</div></div>" +
-        '<h2>어떻게 정할까요?</h2><button class="tile" data-act="priority">가장 중요한 기준으로 정하기 ›</button><button class="tile" data-act="makepoll">친구에게 물어보기 ›</button>' +
-        "<p>내가 직접 고르기</p>" +
-        tied
-          .map(
-            (option) =>
-              '<button class="tile" data-act="pickwinner" data-id="' +
-              esc(option.id) +
-              '">' +
-              esc(option.name) +
-              " ›</button>",
-          )
-          .join("") +
-        btn("계정에 결과 저장", "save", "secondary")
-      );
-    const first = winner(r);
-    return (
-      stephead("결과가 나왔어요", 5) +
-      '<div class="winner"><small>출구 · 선택 결과</small><div><small>1위 · 기준을 가장 잘 만족했어요</small><h2>' +
-      esc(first.name) +
-      "</h2><b>" +
-      first.score +
-      "점</b></div></div>" +
-      r.ranking
-        .filter((o) => o.id !== first.id)
-        .map(
-          (o, i) =>
-            '<div class="rank"><span>' +
-            (i + 2) +
-            "위 · " +
-            esc(o.name) +
-            "</span><b>" +
-            o.score +
-            "점</b></div>",
-        )
-        .join("") +
-      '<div class="subhead">기준별 점수</div><div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse" border="1" cellpadding="8"><tr><th>기준</th>' +
-      r.options.map((o) => "<th>" + esc(o.name) + "</th>").join("") +
-      "</tr>" +
-      r.criteria
-        .map(
-          (c, i) =>
-            "<tr><td>" +
-            esc(c) +
-            " ×" +
-            (r.criteria.length - i) +
-            "</td>" +
-            r.options
-              .map(
-                (o) =>
-                  "<td>" + Number(r.ratings[o.id + "|" + c] || 3) + "</td>",
-              )
-              .join("") +
-            "</tr>",
-        )
-        .join("") +
-      '</table></div><div class="footer">' +
-      btn("다시 뽑기", "start", "secondary") +
-      btn("이걸로 결정!", "choose") +
-      "</div>" +
-      btn("계정에 결과 저장", "save", "secondary") +
-      '<button class="tile" data-act="makepoll">친구에게도 물어보기 ↗</button>'
-    );
-  }
-  function setup() {
-    return (
-      '<div class="stepTop"><h1>친구에게 물어보기</h1><small>나</small></div><p class="sub">이렇게 보내줘요.</p><div class="dark"><b>' +
-      esc(decision?.title || "고민") +
-      "</b>" +
-      decision.options.map((o) => optionRow(o.name)).join("") +
-      '</div><div class="subhead">투표 설정</div>' +
-      (winner(decision)
-        ? '<label class="toggle">내 점수 결과도 보여주기<input type="checkbox" role="switch" data-in="showresult" ' +
-          (showResult ? "checked" : "") +
-          '></label><p class="hint">끄면 친구에게 내 결과가 표시되지 않아요.</p>'
-        : "") +
-      '<div class="subhead">투표 마감</div><div class="chips">' +
-      [
-        ["hour", "1시간"],
-        ["today", "오늘까지"],
-        ["tomorrow", "내일까지"],
-      ]
-        .map(
-          ([k, v]) =>
-            '<button class="chip ' +
-            (deadline === k ? "selected" : "") +
-            '" data-act="deadline" data-val="' +
-            k +
-            '">' +
-            v +
-            "</button>",
-        )
-        .join("") +
-      '</div><div class="notice">' +
-      (user
-        ? "로그인 상태입니다. 실제로 친구에게 공유되는 투표를 생성할 수 있어요."
-        : "실제 공유 투표 생성은 Google 로그인이 필요해요. Google 로그인 후 링크를 공유할 수 있어요.") +
-      "</div>" +
-      (user
-        ? btn("투표 링크 만들기", "createpoll")
-        : btn("Google 로그인하고 링크 만들기", "loginpoll") +
-          btn("이 기기에서 미리 보기", "createpoll", "secondary"))
-    );
-  }
-  function share() {
-    const url = pollLink(poll.id);
-    return (
-      '<div class="empty"><div style="font-size:45px">✉</div><h2>투표가 준비됐어요!</h2><p>' +
-      esc(poll.topic) +
-      '</p><p class="hint">' +
-      (poll.demo
-        ? "이 링크는 데모용이며 다른 기기에서는 동작하지 않습니다."
-        : "친구에게 링크를 보내주세요. 비회원도 투표할 수 있어요.") +
-      '</p></div><input class="input" readonly value="' +
-      esc(url.href) +
-      '">' +
-      btn("공유 링크 복사하기", "copy") +
-      '<div class="footer">' +
-      btn("투표 화면", "visit", "secondary") +
-      btn("투표 현황", "stats") +
-      "</div>"
-    );
-  }
-  function publicvote() {
-    if (loading) return '<div class="empty">투표를 불러오는 중...</div>';
-    if (pollError)
-      return (
-        '<div class="empty"><h2>투표를 불러오지 못했어요.</h2>' +
-        btn("다시 시도", "retryvote") +
-        "</div>"
-      );
-    if (!current)
-      return '<div class="empty"><h2>투표를 찾을 수 없습니다.</h2><button class="btn" data-act="home">홈으로</button></div>';
-    if (read("voted_" + current.id, false))
-      return '<div class="empty"><h2>투표 완료!</h2><p>의견을 전달했어요.</p></div>';
-    if (new Date(current.expires_at) <= new Date())
-      return '<div class="empty">마감된 투표예요.</div>';
-    return (
-      '<div class="guestVote"><div class="stepTop"><h1>친구의 고민</h1><small>친구</small></div><h2 style="margin-top:28px">' +
-      esc(current.topic) +
-      '</h2><p class="sub">하나를 골라 버튼을 눌러주세요 · 로그인 없어요</p><div class="dark">' +
-      current.options
-        .map((o) => optionRow(o.label, vote === o.id, o.id))
-        .join("") +
       "</div>" +
       (current.show_my_result && current.owner_winner
-        ? '<p class="notice">친구의 선택 · ' +
-          esc(current.owner_winner) +
-          "</p>"
+        ? muted("친구의 선택 · " + current.owner_winner)
         : "") +
-      '<label class="field" for="vote-note">한마디 (선택)</label><textarea id="vote-note" rows="2" data-in="note" class="input" maxlength="200" placeholder="의견을 남겨주세요">' +
-      esc(note) +
-      '</textarea><label class="field" for="vote-name">이름 (선택) <small>비워두면 익명</small></label><input id="vote-name" data-in="voter" class="input" maxlength="30" placeholder="이름" value="' +
-      esc(voter) +
-      '"/><div class="footer">' +
-      btn("투표하기", "cast") +
-      "</div></div>"
+      input("나의 훈수 (선택)", "note", note, "크흠...", 200) +
+      input("닉네임 (선택)", "voter", voter, "익명의 외계인", 30) +
+      footer(action("투표하기", "cast", vote ? "" : "disabled"))
     );
   }
+  function pollRanks(item, entries) {
+    let previous = -1,
+      rank = 0;
+    return item.options
+      .map((option, i) => ({
+        ...option,
+        index: i,
+        count: entries.filter((entry) => entry.option_id === option.id).length,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .map((option, i) => {
+        if (option.count !== previous) rank = i + 1;
+        previous = option.count;
+        return { ...option, rank };
+      });
+  }
   function stats() {
-    return (
-      '<div class="stepTop"><h1>친구 투표 결과</h1><small>' +
-      votes.length +
-      "표</small></div><h2>" +
-      esc(poll.topic) +
+    const ended = new Date(poll.expires_at) <= new Date();
+    const ranked = pollRanks(poll, votes);
+    const top = ranked.filter((option) => option.rank === 1 && option.count);
+    const notes = action(
+      "친구들이 둔 훈수와 선택지 확인하기 " + icon("IconNext"),
+      "notes",
+      "",
+      "inbox-button",
+    );
+    const intro =
+      '<section class="share-message' +
+      (votes.length ? "" : " no-votes") +
+      '">' +
+      symbol("!") +
+      "<h2>" +
+      (votes.length
+        ? "친구에게 공유하세요"
+        : ended
+          ? "받은 투표가 없어요"
+          : "아직 투표한 사람이 없어요") +
       "</h2>" +
-      poll.options
-        .map((o) => {
-          const c = votes.filter((v) => v.option_id === o.id).length,
-            p = votes.length ? Math.round((c / votes.length) * 100) : 0;
+      muted(
+        votes.length
+          ? "로그인 없이 링크만 누르면 투표할 수 있어요"
+          : "투표 링크를 복사해 친구에게 공유하세요!",
+      ) +
+      "</section>";
+    return (
+      header(ended ? "투표 종료!" : "아직 진행 중이에요") +
+      (ended && top.length
+        ? muted("우리의 선택은...") +
+          (top.length === 1
+            ? pick(top[0], top[0].index, "1위")
+            : '<div class="winner ties">' +
+              top.map((o) => card(o, o.index)).join("") +
+              "</div>") +
+          '<section class="result-ranks"><h2>다른 후보 순위</h2>' +
+          muted("다음 기회에") +
+          rankList(ranked.filter((o) => o.rank > 1)) +
+          "</section>" +
+          notes
+        : intro +
+          linkbox() +
+          (votes.length
+            ? notes +
+              '<section class="result-ranks"><h2>지금까지 투표 (' +
+              votes.length +
+              "명)</h2>" +
+              rankList(ranked) +
+              "</section>"
+            : "")) +
+      footer(
+        '<div class="split">' +
+          action(
+            ended ? "결과 공유하기" : "공유하기",
+            ended ? "copy-results" : "copy",
+            "",
+            "secondary",
+          ) +
+          action("새 고민", "start") +
+          "</div>",
+      )
+    );
+  }
+  function inbox() {
+    return (
+      header("쪽지함", { back: "stats" }) +
+      muted("친구들의 픽을 확인하세요!") +
+      '<div class="notes">' +
+      votes
+        .map((entry) => {
+          const index = poll.options.findIndex((o) => o.id === entry.option_id);
+          const option = poll.options[index];
           return (
-            '<div class="row" style="display:block"><b>' +
-            esc(o.label) +
-            '</b><span style="float:right">' +
-            c +
-            "표 · " +
-            p +
-            '%</span><div class="bar"><span style="width:' +
-            p +
-            '%"></span></div></div>'
+            '<article class="' +
+            color(option ?? {}, Math.max(index, 0)) +
+            '">' +
+            (entry.note ? "<p>" + esc(entry.note) + "</p>" : "") +
+            "<footer><span>" +
+            esc(entry.voter_name || "익명") +
+            "</span><span>" +
+            esc(option?.label ?? "") +
+            "</span></footer></article>"
           );
         })
         .join("") +
-      "<h3>친구가 남긴 의견</h3>" +
-      votes
-        .filter((v) => v.note)
-        .map(
-          (v) =>
-            '<div class="msg"><b>' +
-            esc(v.voter_name || "익명") +
-            "</b><p>" +
-            esc(v.note) +
-            "</p></div>",
-        )
-        .join("") +
-      btn("새로고침", "stats", "secondary") +
-      btn("홈으로", "home")
+      "</div>" +
+      footer(action("공유하기", "copy", "", "secondary"))
     );
   }
   function account() {
     return (
-      "<h1>마이페이지</h1>" +
+      header("마이페이지", { back: "home" }) +
       (user
-        ? '<div class="notice">로그인한 계정: ' +
-          esc(user.email) +
-          "</div>" +
-          btn("내 선택 기록", "history") +
-          btn("최근에 만든 투표", "recentpoll", "secondary") +
-          btn("로그아웃", "logout", "secondary")
-        : '<p class="sub">Google 계정으로 로그인하면 결과를 안전하게 저장하고 다른 기기에서도 이어볼 수 있어요.</p>' +
-          btn("Google로 계속하기", "login"))
+        ? muted(user.email) +
+          '<div class="account-actions">' +
+          action("내 선택 기록", "history") +
+          action("최근에 만든 투표", "recentpoll", "", "secondary") +
+          action("로그아웃", "logout", "", "secondary") +
+          "</div>"
+        : muted(
+            "Google 계정으로 로그인하면 선택 기록을 저장하고 다른 기기에서도 이어볼 수 있어요.",
+          ) +
+          footer(
+            action("Google로 계속하기", "login", authReady ? "" : "disabled"),
+          ))
     );
   }
   function historypage() {
     return (
-      "<h1>내 선택 기록</h1>" +
+      header("내 선택 기록", { back: "home" }) +
       (historyError
-        ? '<p class="notice">기록을 불러오지 못했어요.</p>' +
-          btn("다시 불러오기", "reloadhistory", "secondary")
+        ? muted("기록을 불러오지 못했어요.") +
+          action("다시 불러오기", "reloadhistory", "", "secondary")
         : "") +
-      (!records.length
-        ? '<p class="sub">아직 기록이 없어요.</p>'
-        : records
-            .map(
-              (r, i) =>
-                '<button class="tile" data-act="openhistory" data-i="' +
-                i +
-                '"><span>' +
-                esc(r.title) +
-                "</span><small>" +
-                esc(winnerLabel(r)) +
-                "</small></button>",
+      (records.length
+        ? '<div class="history-list">' +
+          records
+            .map((record, index) =>
+              action(
+                "<span>" +
+                  esc(record.title) +
+                  "</span><small>" +
+                  esc(winnerLabel(record)) +
+                  "</small>",
+                "openhistory",
+                'data-i="' + index + '"',
+                "secondary",
+              ),
             )
-            .join("")) +
-      btn("새 고민 시작", "start")
-    );
-  }
-  function foot(name = "다음") {
-    return (
-      '<div class="footer">' +
-      btn("이전", "back", "secondary") +
-      btn(name, "next") +
-      "</div>"
+            .join("") +
+          "</div>"
+        : muted("아직 기록이 없어요.")) +
+      footer(action("새 고민", "start"))
     );
   }
   function render() {
-    document
-      .querySelector(".shell")
-      .classList.toggle("guest-page", view === "vote");
-    document.getElementById("authbutton").disabled = !authReady;
-    document.getElementById("authbutton").textContent = user
-      ? "MY PAGE ↗"
-      : "로그인 ↗";
-    $.innerHTML =
-      view === "home"
-        ? home()
-        : view === "wizard"
-          ? [one, two, three, four][step - 1]()
-          : view === "result"
-            ? result()
-            : view === "setup"
-              ? setup()
-              : view === "share"
-                ? share()
-                : view === "vote"
-                  ? publicvote()
-                  : view === "stats"
-                    ? stats()
-                    : view === "account"
-                      ? account()
-                      : historypage();
+    $.className = "page " + view;
+    $.innerHTML = {
+      home,
+      result,
+      setup,
+      share,
+      vote: publicvote,
+      stats,
+      notes: inbox,
+      account,
+      history: historypage,
+      wizard: () => [one, two, four][step - 1](),
+    }[view]();
   }
-  const done = async () => {
-    const weights = draft.criteria.length;
-    const sum = (weights * (weights + 1)) / 2;
+  async function done() {
+    const pair = draft.cat === "pair";
+    const sum = draft.criteria.reduce(
+      (total, criterion) => total + (draft.weights[criterion] ?? 3),
+      0,
+    );
     const ranking = draft.options
-      .map((o) => {
-        const weighted = draft.criteria.reduce(
-          (s, c, j) => s + (draft.ratings[o.id + "|" + c] || 3) * (weights - j),
-          0,
-        );
+      .map((option, index) => {
+        const weighted = draft.criteria.reduce((total, criterion) => {
+          const value = pair
+            ? index === 0
+              ? 6 - draft.comparisons[criterion]
+              : draft.comparisons[criterion]
+            : draft.ratings[option.id + "|" + criterion];
+          return total + value * (draft.weights[criterion] ?? 3);
+        }, 0);
         return {
-          ...o,
-          name: o.name.trim(),
+          ...option,
           weighted,
           score: Math.round((weighted / (sum * 5)) * 100),
         };
       })
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => b.weighted - a.weighted);
     decision = {
       id: id(),
-      title: draft.title.trim(),
+      title: draft.title.trim() || PRESETS[draft.cat].label,
       category: draft.cat,
       criteria: [...draft.criteria],
-      options: draft.options.map((x) => ({ ...x, name: x.name.trim() })),
+      weights: { ...draft.weights },
+      options: draft.options.map((option) => ({ ...option })),
       ratings: { ...draft.ratings },
+      comparisons: { ...draft.comparisons },
       ranking,
       created_at: new Date().toISOString(),
     };
     rememberGuest(decision);
     go("result");
     if (user) await saveDecision(decision);
-  };
+  }
   async function createPoll() {
-    let expiry = new Date();
-    if (deadline === "hour") expiry = new Date(expiry.getTime() + 3600e3);
-    else
-      expiry = new Date(
-        expiry.getFullYear(),
-        expiry.getMonth(),
-        expiry.getDate() + (deadline === "tomorrow" ? 2 : 1),
-      );
+    const expires_at = new Date(
+      Date.now() + Number(deadline) * 3600e3,
+    ).toISOString();
     const body = {
-      topic: decision.title,
-      options: decision.options.map((o) => ({ id: o.id, label: o.name })),
-      owner_winner: showResult ? (winner(decision)?.name ?? null) : null,
-      show_my_result: showResult,
-      expires_at: expiry.toISOString(),
+      topic: draft.title.trim(),
+      options: draft.options.map((option) => ({
+        id: option.id,
+        label: option.name,
+        color: option.color,
+        ...(validPhoto(option.photo) ? { photo: option.photo } : {}),
+      })),
+      owner_winner: null,
+      show_my_result: false,
+      expires_at,
     };
     if (user) {
       const { data, error } = await supa
@@ -703,9 +938,7 @@
       poll = { ...data, demo: false };
     } else {
       poll = { ...body, id: id(), demo: true };
-      let polls = read("polls", {});
-      polls[poll.id] = poll;
-      save("polls", polls);
+      save("polls", { ...read("polls", {}), [poll.id]: poll });
     }
     go("share");
   }
@@ -762,7 +995,7 @@
             : "투표를 기록하지 못했어요. 다시 시도해 주세요.",
         );
     }
-    save("voted_" + data.poll_id, true);
+    save("voted_" + data.poll_id, data.option_id);
     render();
   }
   async function statsLoad() {
@@ -782,167 +1015,404 @@
     }
     go("stats");
   }
-  $.addEventListener("input", (e) => {
-    const n = e.target.dataset.in;
-    if (n === "showresult") showResult = e.target.checked;
-    if (n === "title") draft.title = e.target.value;
-    if (n === "option")
-      draft.options.find((o) => o.id === e.target.dataset.id).name =
-        e.target.value;
-    if (n === "note") note = e.target.value;
-    if (n === "voter") voter = e.target.value;
-    if (n === "title" || n === "option") save("draft", draft);
+  const dialog = document.querySelector("dialog");
+  let editor = null;
+  function edit(kind, index, suggestion = "") {
+    const entry = kind === "candidate" ? draft.options[index] : null;
+    editor = {
+      kind,
+      index,
+      name:
+        kind === "criterion"
+          ? (draft.criteria[index] ?? suggestion)
+          : (entry?.name ?? ""),
+      photo: entry?.photo ?? "",
+      weight: draft.weights[draft.criteria[index]] ?? 0,
+    };
+    paintEditor();
+    if (!dialog.open) dialog.showModal();
+  }
+  function paintEditor() {
+    const isCriterion = editor.kind === "criterion";
+    const existing = isCriterion
+      ? editor.index < draft.criteria.length
+      : Boolean(draft.options[editor.index]?.name);
+    const title =
+      (isCriterion ? "기준 " : "후보 ") + (existing ? "수정" : "추가");
+    const content = isCriterion
+      ? "<fieldset><legend>중요도</legend>" +
+        scale(editor.weight, "weight") +
+        "</fieldset>"
+      : '<label class="photo-input">' +
+        (editor.photo ? "사진 바꾸기" : "사진 추가하기 (선택)") +
+        icon("IconNext") +
+        '<input type="file" accept="image/*" data-in="picture"></label>' +
+        (editor.photo
+          ? '<img class="upload-preview" src="' +
+            editor.photo +
+            '" alt="추가할 후보 사진">'
+          : "");
+    dialog.innerHTML =
+      '<div class="modal-header"><h2>' +
+      title +
+      "</h2>" +
+      action(
+        icon("IconClose"),
+        "close-dialog",
+        'aria-label="닫기"',
+        "icon-button",
+      ) +
+      "</div>" +
+      '<div class="modal-body">' +
+      input(
+        isCriterion ? "기준 이름" : "후보 이름",
+        "editor-name",
+        editor.name,
+        "이름을 적어주세요!",
+        isCriterion ? 24 : 35,
+      ) +
+      content +
+      '<div class="modal-actions">' +
+      (existing && !isCriterion && draft.cat !== "pair"
+        ? action("후보 삭제", "remove-candidate", "", "text-button")
+        : "") +
+      action(
+        existing ? "저장하기" : "추가하기",
+        "save-dialog",
+        editor.name.trim() && (!isCriterion || editor.weight) ? "" : "disabled",
+      ) +
+      "</div></div>";
+  }
+  function commitEditor() {
+    const name = editor.name.trim();
+    if (!name) return;
+    if (editor.kind === "criterion") {
+      const old = draft.criteria[editor.index];
+      if (!editor.weight) return;
+      if (old !== name && draft.criteria.includes(name))
+        return toast("이미 추가한 기준이에요.");
+      draft.criteria[editor.index] = name;
+      if (old && old !== name) delete draft.weights[old];
+      draft.weights[name] = editor.weight;
+    } else {
+      const previous = draft.options[editor.index];
+      draft.options[editor.index] = {
+        id: previous?.id ?? id(),
+        name,
+        photo: editor.photo,
+        color:
+          draft.cat === "pair"
+            ? editor.index === 0
+              ? "pink"
+              : "blue"
+            : (previous?.color ?? palettes[editor.index % palettes.length]),
+      };
+    }
+    dialog.close();
+    render();
+  }
+  async function uploadPhoto(file) {
+    if (!file) return;
+    if (file.size > 15_000_000) return toast("15MB 이하의 사진을 골라 주세요.");
+    const editing = editor;
+    try {
+      const bitmap = await createImageBitmap(file);
+      const fit = Math.min(1, 480 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * fit));
+      canvas.height = Math.max(1, Math.round(bitmap.height * fit));
+      canvas
+        .getContext("2d")
+        .drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      if (editor !== editing || !dialog.open) return;
+      const photo = canvas.toDataURL("image/webp", 0.78);
+      if (!validPhoto(photo))
+        return toast("이 브라우저에서 사진을 처리하지 못했어요.");
+      editor.photo = photo;
+      paintEditor();
+    } catch {
+      toast("사진을 열 수 없어요. 다른 파일을 골라 주세요.");
+    }
+  }
+  dialog.addEventListener("close", () => {
+    document.body.append(status);
+    status.hidden = true;
+    editor = null;
   });
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  document.addEventListener("input", (e) => {
+    const key = e.target.dataset.in;
+    if (key === "title") {
+      draft.title = e.target.value;
+      if (view === "setup") {
+        const button = $.querySelector(
+          '[data-act="createpoll"],[data-act="loginpoll"]',
+        );
+        button.disabled = !pollReady();
+        const preview = $.querySelector(".text-button[data-act=createpoll]");
+        if (preview) preview.hidden = !pollReady();
+      }
+    }
+    if (key === "note") note = e.target.value;
+    if (key === "voter") voter = e.target.value;
+    if (key === "editor-name" && editor) {
+      editor.name = e.target.value;
+      dialog.querySelector('[data-act="save-dialog"]').disabled =
+        !editor.name.trim() || (editor.kind === "criterion" && !editor.weight);
+    }
+  });
+  dialog.addEventListener("change", (e) => {
+    if (e.target.dataset.in === "picture") void uploadPhoto(e.target.files[0]);
+  });
+  function resetScore() {
+    criterionIndex = 0;
+    optionIndex = 0;
+    draft.ratings = {};
+    draft.comparisons = {};
+  }
+  function startCompare() {
+    const tied = tie(decision);
+    if (tied.length > 2 && !compareIds.length) {
+      dialog.innerHTML =
+        '<div class="modal-header"><h2>비교할 후보 두 개</h2>' +
+        action(
+          icon("IconClose"),
+          "close-dialog",
+          'aria-label="닫기"',
+          "icon-button",
+        ) +
+        '</div><div class="modal-body">' +
+        tied
+          .map(
+            (option) =>
+              '<label class="compare-choice"><input type="checkbox" name="compare" value="' +
+              esc(option.id) +
+              '">' +
+              esc(option.name) +
+              "</label>",
+          )
+          .join("") +
+        action("비교하기", "confirm-compare") +
+        "</div>";
+      dialog.showModal();
+      return;
+    }
+    draft = fresh();
+    draft.title = decision.title;
+    draft.cat = "pair";
+    draft.criteria = [...decision.criteria];
+    draft.weights = { ...decision.weights };
+    draft.options = (
+      compareIds.length ? tied.filter((o) => compareIds.includes(o.id)) : tied
+    )
+      .slice(0, 2)
+      .map((option, index) => ({ ...option, color: index ? "blue" : "pink" }));
+    compareIds = [];
+    step = 2;
+    go("wizard");
+  }
   document.addEventListener("click", async (e) => {
     const t = e.target.closest("[data-act]");
-    if (!t) return;
+    if (!t || t.disabled || pending) return;
     const a = t.dataset.act;
-    if (pending) return;
+    const index = Number(t.dataset.i);
     pending = true;
-    t.disabled = true;
-    status.textContent = "";
+    status.hidden = true;
     try {
-      if (a === "loginpoll") {
-        sessionStorage.setItem(
-          "pd_resume",
-          JSON.stringify({ view: "setup", decision, deadline, showResult }),
-        );
-        go("account");
-      } else if (a === "home") {
+      if (a === "home") {
         window.history.replaceState(null, "", location.pathname);
         go("home");
       } else if (a === "start" || a === "friend") {
-        friendFlow = a === "friend";
         draft = fresh();
-        save("draft", draft);
+        deadline = "";
         step = 1;
-        go("wizard");
-      } else if (a === "cat") {
-        if (draft.cat === t.dataset.val) return;
+        resetScore();
+        go(a === "friend" ? "setup" : "wizard");
+      } else if (a === "cat" && draft.cat !== t.dataset.val) {
         draft.cat = t.dataset.val;
-        draft.criteria = PRESETS[draft.cat][1].slice(0, 3);
-        mark(draft);
-      } else if (a === "crit") {
-        const c = t.dataset.val;
-        if (draft.criteria.includes(c)) {
-          if (draft.criteria.length === 1)
-            return toast("기준이 하나 이상 필요해요");
-          draft.criteria = draft.criteria.filter((x) => x !== c);
-        } else draft.criteria.push(c);
-        mark(draft);
-      } else if (a === "add") {
-        if (draft.options.length < 4)
-          draft.options.push({ id: id(), name: "" });
-        mark(draft);
-      } else if (a === "remove") {
-        draft.options = draft.options.filter((o) => o.id !== t.dataset.id);
-        mark(draft);
-      } else if (a === "move") {
-        const i = +t.dataset.i,
-          j = i + +t.dataset.d;
-        if (j >= 0 && j < draft.criteria.length)
-          [draft.criteria[i], draft.criteria[j]] = [
-            draft.criteria[j],
-            draft.criteria[i],
-          ];
-        mark(draft);
-      } else if (a === "score") {
-        draft.ratings[t.dataset.id + "|" + t.dataset.c] = +t.dataset.n;
-        mark(draft);
+        draft.criteria = PRESETS[draft.cat].criteria.slice(
+          0,
+          draft.cat === "pair" ? 2 : 3,
+        );
+        draft.weights = Object.fromEntries(
+          draft.criteria.map((criterion) => [criterion, 3]),
+        );
+        draft.options =
+          draft.cat === "pair"
+            ? [0, 1].map((i) => ({
+                ...draft.options[i],
+                id: draft.options[i]?.id ?? id(),
+                name: draft.options[i]?.name ?? "",
+                color: i ? "blue" : "pink",
+              }))
+            : draft.options.filter((option) => option.name);
+        render();
+      } else if (a === "criteria-remove") {
+        const [removed] = draft.criteria.splice(index, 1);
+        delete draft.weights[removed];
+        render();
+      } else if (a === "criterion") {
+        edit(
+          "criterion",
+          Number.isInteger(index) ? index : draft.criteria.length,
+          t.dataset.suggestion,
+        );
+      } else if (a === "candidate") edit("candidate", index);
+      else if (a === "close-dialog") dialog.close();
+      else if (a === "save-dialog" && editor) commitEditor();
+      else if (a === "remove-candidate" && editor) {
+        draft.options.splice(editor.index, 1);
+        dialog.close();
+        render();
+      } else if (a === "weight" && editor) {
+        editor.weight = Number(t.dataset.n);
+        paintEditor();
       } else if (a === "back") {
-        if (step > 1) {
-          step--;
-          render();
-        } else go("home");
+        if (step === 3 && optionIndex > 0) optionIndex--;
+        else if (step === 3 && criterionIndex > 0) {
+          criterionIndex--;
+          optionIndex = draft.cat === "pair" ? 0 : draft.options.length - 1;
+        } else step--;
+        go("wizard");
       } else if (a === "next") {
-        if (step === 1 && !draft.title.trim())
-          return toast("고민 제목을 입력해 주세요");
-        if (step === 2 && draft.options.some((o) => !o.name.trim()))
-          return toast("후보 이름을 입력해 주세요");
-        if (step === 2 && friendFlow) {
-          decision = {
-            id: id(),
-            title: draft.title.trim(),
-            options: draft.options.map((o) => ({ ...o, name: o.name.trim() })),
-            ranking: [],
-            criteria: [],
-            ratings: {},
-          };
-          showResult = false;
-          go("setup");
-        } else if (step === 4) await done();
-        else {
-          step++;
-          render();
-          window.scrollTo(0, 0);
-        }
-      } else if (a === "choose") {
-        if (user) {
-          if (await saveDecision(decision)) toast("결정을 저장했어요.");
+        if (step === 1) {
+          if (!draft.cat || !draft.criteria.length)
+            return toast("양식과 비교 기준을 골라 주세요.");
+          step = 2;
+        } else if (step === 2) {
+          if (!optionsReady()) return toast("후보를 두 개 이상 등록해 주세요.");
+          step = 3;
+          resetScore();
         } else {
-          rememberGuest(decision);
-          toast("이 기기에 결정을 저장했어요.");
+          const pair = draft.cat === "pair";
+          const selected = pair
+            ? draft.comparisons[draft.criteria[criterionIndex]]
+            : draft.ratings[scoreKey()];
+          if (!selected) return;
+          if (!pair && optionIndex + 1 < draft.options.length) optionIndex++;
+          else if (criterionIndex + 1 < draft.criteria.length) {
+            criterionIndex++;
+            optionIndex = 0;
+          } else return await done();
         }
-      } else if (a === "pickwinner" || a === "priority") {
-        const tied = tie(decision);
-        const selected =
-          a === "pickwinner"
-            ? tied.find((option) => option.id === t.dataset.id)
-            : [...tied].sort((left, right) => {
-                for (const criterion of decision.criteria) {
-                  const comparison =
-                    (decision.ratings[right.id + "|" + criterion] ?? 3) -
-                    (decision.ratings[left.id + "|" + criterion] ?? 3);
-                  if (comparison) return comparison;
-                }
-                return 0;
-              })[0];
-        if (
-          a === "priority" &&
-          tied.every((option) =>
-            decision.criteria.every(
-              (criterion) =>
-                (decision.ratings[option.id + "|" + criterion] ?? 3) ===
-                (decision.ratings[selected.id + "|" + criterion] ?? 3),
-            ),
-          )
-        )
-          return toast("모든 기준에서도 동점이에요. 후보를 직접 골라 주세요.");
-        if (selected) {
-          decision = { ...decision, chosenId: selected.id };
-          rememberGuest(decision);
-          render();
-          if (user) await saveDecision(decision);
-        }
+        go("wizard");
+      } else if (a === "score") {
+        const rating = Number(t.dataset.n);
+        if (draft.cat === "pair")
+          draft.comparisons[draft.criteria[criterionIndex]] = rating;
+        else draft.ratings[scoreKey()] = rating;
+        render();
+      } else if (a === "rescore") {
+        draft = {
+          ...fresh(),
+          title: decision.title,
+          cat: decision.category,
+          options: decision.options.map((o) => ({ ...o })),
+          criteria: [...decision.criteria],
+          weights: { ...decision.weights },
+        };
+        step = 3;
+        resetScore();
+        go("wizard");
+      } else if (a === "compare-tie") startCompare();
+      else if (a === "confirm-compare") {
+        const selected = [
+          ...dialog.querySelectorAll('[name="compare"]:checked'),
+        ].map((input) => input.value);
+        if (selected.length !== 2) return toast("후보를 두 개 골라 주세요.");
+        compareIds = selected;
+        dialog.close();
+        startCompare();
       } else if (a === "makepoll") {
-        showResult = false;
+        draft = {
+          ...fresh(),
+          title: decision.title,
+          options: decision.options.map((o) => ({ ...o })),
+        };
+        deadline = "";
         go("setup");
-      } else if (a === "reloadhistory" && user) await loadHistory(user.id);
-      else if (a === "retryvote")
-        await openpoll(new URL(location.href).searchParams.get("poll"));
+      } else if (a === "setup-back") go(view === "share" ? "setup" : "home");
       else if (a === "deadline") {
         deadline = t.dataset.val;
         render();
-      } else if (a === "createpoll") await createPoll();
-      else if (a === "copy") {
-        const url = pollLink(poll.id);
+      } else if (a === "loginpoll" && pollReady()) {
+        sessionStorage.setItem(
+          "pd_resume",
+          JSON.stringify({ view: "setup", draft, deadline }),
+        );
+        go("account");
+      } else if (a === "createpoll" && pollReady()) await createPoll();
+      else if (a === "copy" || a === "copy-results") {
+        const resultCopy = a === "copy-results";
+        const summary = resultCopy
+          ? [
+              "PICKDROP · " + poll.topic,
+              votes.length ? votes.length + "명 참여" : "받은 투표가 없어요",
+              ...pollRanks(poll, votes)
+                .filter((option) => option.count)
+                .map(
+                  (option) =>
+                    option.rank +
+                    "위 " +
+                    option.label +
+                    " (" +
+                    option.count +
+                    "표)",
+                ),
+            ].join("\n")
+          : pollLink(poll.id).href;
         try {
-          await navigator.clipboard.writeText(url.href);
-          toast("링크를 복사했어요.");
+          await navigator.clipboard.writeText(summary);
+          toast(
+            resultCopy
+              ? "투표 결과가 복사되었어요"
+              : "투표 링크가 복사되었어요",
+            "success",
+          );
         } catch {
-          const input = $.querySelector("input[readonly]");
-          input?.select();
-          toast("선택된 링크를 복사해 주세요.");
+          const link = $.querySelector("input[readonly]");
+          if (!resultCopy && link) {
+            link.select();
+            toast("선택된 링크를 복사해 주세요.");
+          } else toast("복사하지 못했어요. 다시 시도해 주세요.");
         }
       } else if (a === "visit") {
-        const u = pollLink(poll.id);
-        window.history.pushState(null, "", u);
+        const url = pollLink(poll.id);
+        window.history.pushState(null, "", url);
         await openpoll(poll.id);
-      } else if (a === "voteselect") {
-        vote = t.dataset.id;
+      } else if (a === "retryvote")
+        await openpoll(new URL(location.href).searchParams.get("poll"));
+      else if (a === "voteselect") {
+        const strip = $.querySelector(".guest-options");
+        const position = strip.scrollLeft;
+        vote = current.options[index].id;
         render();
+        $.querySelector(".guest-options").scrollLeft = position;
+      } else if (a === "photo") {
+        const option = current.options[index];
+        if (!validPhoto(option?.photo)) return;
+        dialog.innerHTML =
+          '<div class="modal-header"><h2>' +
+          esc(option.label) +
+          "</h2>" +
+          action(
+            icon("IconClose"),
+            "close-dialog",
+            'aria-label="닫기"',
+            "icon-button",
+          ) +
+          '</div><img class="expanded-photo" src="' +
+          option.photo +
+          '" alt="' +
+          esc(option.label) +
+          '">';
+        dialog.showModal();
       } else if (a === "cast") await cast();
       else if (a === "stats") await statsLoad();
+      else if (a === "notes") go("notes");
       else if (a === "recentpoll" && user) {
         const owner = user.id;
         const { data, error } = await supa
@@ -956,10 +1426,11 @@
         if (error) return toast("최근 투표를 불러오지 못했어요.");
         if (!data) return toast("아직 만든 투표가 없어요.");
         poll = { ...data, demo: false };
-        go("share");
+        await statsLoad();
       } else if (a === "history") go("history");
+      else if (a === "reloadhistory" && user) await loadHistory(user.id);
       else if (a === "openhistory") {
-        decision = records[+t.dataset.i];
+        decision = records[index];
         go("result");
       } else if (a === "account") go("account");
       else if (a === "login") {
@@ -968,11 +1439,7 @@
           options: { redirectTo: location.origin + location.pathname },
         });
         if (error)
-          toast(
-            error.message.includes("provider is not enabled")
-              ? "현재 Google 로그인을 사용할 수 없어요."
-              : "Google 로그인을 시작하지 못했어요. 다시 시도해 주세요.",
-          );
+          toast("Google 로그인을 시작하지 못했어요. 다시 시도해 주세요.");
       } else if (a === "logout") {
         const { error } = await supa.auth.signOut();
         if (error) return toast("로그아웃하지 못했어요. 다시 시도해 주세요.");
@@ -983,16 +1450,15 @@
             "pd_resume",
             JSON.stringify({ view: "result", decision }),
           );
-          return go("account");
-        }
-        if (await saveDecision(decision)) toast("결과를 저장했어요.");
+          go("account");
+        } else if (await saveDecision(decision))
+          toast("결과를 저장했어요.", "success");
       }
     } catch (err) {
       console.error(err);
       toast("문제가 발생했어요. 다시 시도해 주세요.");
     } finally {
       pending = false;
-      t.disabled = false;
     }
   });
   supa.auth.onAuthStateChange((event, session) => {
@@ -1013,7 +1479,7 @@
           const saved = JSON.parse(resume);
           decision = saved.decision;
           deadline = saved.deadline ?? deadline;
-          showResult = saved.showResult ?? false;
+          if (saved.draft) draft = saved.draft;
           go(saved.view);
         }
         // Supabase auth callbacks must release the auth lock before making data requests.
@@ -1031,7 +1497,7 @@
     }
   });
   function route() {
-    status.textContent = "";
+    status.hidden = true;
     const key = new URL(location.href).searchParams.get("poll");
     if (key) void openpoll(key);
     else go("home");
