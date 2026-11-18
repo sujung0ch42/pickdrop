@@ -492,6 +492,9 @@ input::placeholder {
 .pair-scale .dot-2[aria-pressed="true"] {
   background: #d882cc;
 }
+.pair-scale .dot-3[aria-pressed="true"] {
+  background: #b88be1;
+}
 .pair-scale .dot-4[aria-pressed="true"],
 .pair-scale .dot-5[aria-pressed="true"] {
   background: var(--blue);
