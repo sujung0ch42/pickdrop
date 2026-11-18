@@ -58,6 +58,9 @@
     save = (k, v) => localStorage.setItem("pd_" + k, JSON.stringify(v));
   let user = null,
     authReady = false,
+    authMode = "login",
+    authEmail = "",
+    authMessage = "",
     pending = false,
     historyError = false,
     pollError = false,
@@ -988,24 +991,171 @@
       footer(action("공유하기", "copy", "", "secondary"))
     );
   }
-  function account() {
+  const authRedirect = () => location.origin + location.pathname;
+  function authForm() {
+    const isSignup = authMode === "signup";
+    const isReset = authMode === "reset";
+    const isRecovery = authMode === "recovery";
+    const isLogin = authMode === "login";
+    const title = isSignup
+      ? "회원가입"
+      : isReset
+        ? "비밀번호 찾기"
+        : isRecovery
+          ? "새 비밀번호 설정"
+          : "로그인";
+    const submit = isReset
+      ? "재설정 이메일 보내기"
+      : isRecovery
+        ? "비밀번호 변경"
+        : title;
     return (
-      header("마이페이지", { back: "home" }) +
-      (user
-        ? muted(user.email) +
-          '<div class="account-actions">' +
-          action("내 선택 기록", "history") +
-          action("내가 만든 투표", "my-polls", "", "secondary") +
-          action("로그아웃", "logout", "", "secondary") +
-          "</div>"
-        : muted(
-            "Google 계정으로 로그인하면 선택 기록을 저장하고 다른 기기에서도 이어볼 수 있어요.",
-          ) +
-          footer(
-            action("Google로 계속하기", "login", authReady ? "" : "disabled"),
-          ))
+      header(title, {
+        back: isLogin ? "home" : isRecovery ? null : "auth-login",
+      }) +
+      (isSignup
+        ? muted("가입 후 받은 이메일에서 주소를 확인해 주세요.")
+        : isReset
+          ? muted("가입한 이메일로 재설정 링크를 보내드려요.")
+          : "") +
+      (authMessage
+        ? '<p class="auth-message" role="status">' + esc(authMessage) + "</p>"
+        : "") +
+      '<form class="auth-form">' +
+      (isRecovery
+        ? ""
+        : '<label class="field">이메일<input name="email" type="email" value="' +
+          esc(authEmail) +
+          '" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required></label>') +
+      (isReset
+        ? ""
+        : '<label class="field">' +
+          (isRecovery ? "새 비밀번호" : "비밀번호") +
+          '<input name="password" type="password" autocomplete="' +
+          (isLogin ? "current-password" : "new-password") +
+          '"' +
+          (isLogin ? "" : ' minlength="8" placeholder="8자 이상"') +
+          " required></label>") +
+      (isRecovery
+        ? '<label class="field">새 비밀번호 확인<input name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required></label>'
+        : "") +
+      '<button class="button" type="submit"' +
+      (authReady ? "" : " disabled") +
+      ">" +
+      submit +
+      "</button></form>" +
+      (isLogin
+        ? '<div class="auth-links">' +
+          action("회원가입", "auth-signup", "", "text-button") +
+          action("비밀번호 찾기", "auth-reset", "", "text-button") +
+          "</div>" +
+          action(
+            "Google로 계속하기",
+            "login",
+            authReady ? "" : "disabled",
+            "secondary",
+          )
+        : isRecovery
+          ? action("취소하고 로그아웃", "logout", "", "text-button")
+          : "")
     );
   }
+  function account() {
+    if (!user || authMode === "recovery") return authForm();
+    return (
+      header("마이페이지", { back: "home" }) +
+      muted(user.email) +
+      '<div class="account-actions">' +
+      action("내 선택 기록", "history") +
+      action("내가 만든 투표", "my-polls", "", "secondary") +
+      action("로그아웃", "logout", "", "secondary") +
+      "</div>"
+    );
+  }
+  function openAuth(mode, message = "") {
+    authEmail =
+      $.querySelector(".auth-form [name=email]")?.value.trim() ?? authEmail;
+    authMode = mode;
+    authMessage = message;
+    go("account");
+  }
+  function showAuthError(error, mode) {
+    const message = {
+      invalid_credentials: "이메일 또는 비밀번호를 확인해 주세요.",
+      email_not_confirmed: "먼저 가입 확인 이메일의 링크를 열어 주세요.",
+      weak_password: "더 안전한 비밀번호를 사용해 주세요.",
+      over_email_send_rate_limit:
+        "이메일 전송 횟수를 초과했어요. 잠시 후 다시 시도해 주세요.",
+      same_password: "이전과 다른 새 비밀번호를 입력해 주세요.",
+      validation_failed: "이메일 주소 또는 입력한 내용을 확인해 주세요.",
+    }[error.code];
+    const fallback =
+      mode === "login"
+        ? "로그인하지 못했어요. 잠시 후 다시 시도해 주세요."
+        : mode === "recovery"
+          ? "비밀번호를 변경하지 못했어요. 재설정 링크를 다시 요청해 주세요."
+          : "이메일을 보내지 못했어요. 잠시 후 다시 시도해 주세요.";
+    toast(message ?? fallback);
+  }
+  $.addEventListener("submit", async (event) => {
+    const form = event.target;
+    if (!form.matches(".auth-form")) return;
+    event.preventDefault();
+    if (!authReady || pending) return;
+    const fields = new FormData(form);
+    const mode = authMode;
+    const email = String(fields.get("email") ?? "").trim();
+    const password = String(fields.get("password") ?? "");
+    if (mode === "recovery" && password !== fields.get("passwordConfirm")) {
+      return toast("두 비밀번호가 일치하는지 확인해 주세요.");
+    }
+    authEmail = email;
+    pending = true;
+    const submit = form.querySelector("button[type=submit]");
+    submit.disabled = true;
+    status.hidden = true;
+    try {
+      if (mode === "login") {
+        const { error } = await supa.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) return showAuthError(error, mode);
+      } else if (mode === "signup") {
+        const { data, error } = await supa.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: authRedirect() },
+        });
+        if (
+          error &&
+          !["user_already_exists", "email_exists"].includes(error.code)
+        )
+          return showAuthError(error, mode);
+        if (!data?.session)
+          openAuth(
+            "login",
+            "가입 확인 이메일을 확인해 주세요. 이미 가입했다면 로그인할 수 있어요.",
+          );
+      } else if (mode === "reset") {
+        const { error } = await supa.auth.resetPasswordForEmail(email, {
+          redirectTo: authRedirect(),
+        });
+        if (error) return showAuthError(error, mode);
+        openAuth("login", "가입된 주소라면 비밀번호 재설정 이메일이 도착해요.");
+      } else if (mode === "recovery" && user) {
+        const { error } = await supa.auth.updateUser({ password });
+        if (error) return showAuthError(error, mode);
+        openAuth("login");
+        toast("비밀번호를 변경했어요.", "success");
+      }
+    } catch {
+      toast("요청을 완료하지 못했어요. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      pending = false;
+      submit.disabled = false;
+    }
+  });
   const pollDeadlineFormat = new Intl.DateTimeFormat("ko-KR", {
     dateStyle: "medium",
     timeStyle: "short",
@@ -1897,17 +2047,23 @@
       else if (a === "openhistory") {
         decision = records[index];
         go("result");
-      } else if (a === "account") go("account");
+      } else if (a === "account") openAuth("login");
+      else if (a === "auth-login") openAuth("login");
+      else if (a === "auth-signup") openAuth("signup");
+      else if (a === "auth-reset") openAuth("reset");
       else if (a === "login") {
         const { error } = await supa.auth.signInWithOAuth({
           provider: "google",
-          options: { redirectTo: location.origin + location.pathname },
+          options: { redirectTo: authRedirect() },
         });
         if (error)
           toast("Google 로그인을 시작하지 못했어요. 다시 시도해 주세요.");
       } else if (a === "logout") {
         const { error } = await supa.auth.signOut();
         if (error) return toast("로그아웃하지 못했어요. 다시 시도해 주세요.");
+        authMode = "login";
+        authMessage = "";
+        authEmail = "";
         go("home");
       } else if (a === "save") {
         if (!user) {
@@ -1929,6 +2085,16 @@
   supa.auth.onAuthStateChange((event, session) => {
     const old = user?.id;
     user = session?.user ?? null;
+    if (event === "PASSWORD_RECOVERY" && user) {
+      authReady = true;
+      records = [];
+      authEmail = "";
+      openAuth("recovery");
+      setTimeout(() => {
+        if (user?.id === session.user.id) void loadHistory(session.user.id);
+      }, 0);
+      return;
+    }
     if (!authReady || old !== user?.id) {
       authReady = true;
       records = user ? [] : read("history", []);
@@ -1979,5 +2145,5 @@
     new URLSearchParams(location.search).get("error_description");
   route();
   if (oauthError)
-    toast("Google 로그인을 완료하지 못했어요. 다시 시도해 주세요.");
+    toast("인증 링크를 열 수 없어요. 로그인 화면에서 다시 시도해 주세요.");
 })();
