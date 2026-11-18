@@ -93,18 +93,141 @@
     comparisons: {},
   });
   draft = fresh();
-  const go = (v) => {
+  const transitions = {
+    inLeft: { transform: "translateX(100%)", duration: 300 },
+    inRight: { transform: "translateX(-100%)", duration: 300 },
+    dissolve: { opacity: 0, duration: 200 },
+    smart: { opacity: 0, duration: 300 },
+  };
+  let scoreAdvance, statsRefresh, screenAnimation;
+  let playIntro = true;
+  const reduceMotion = () =>
+    window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  function animate(node, frames, duration, easing = "ease-out") {
+    if (!reduceMotion()) return node?.animate?.(frames, { duration, easing });
+  }
+  const go = (v, transition) => {
+    clearTimeout(scoreAdvance);
+    clearTimeout(statsRefresh);
+    screenAnimation?.cancel();
+    const motion = transitions[transition];
+    let outgoing;
+    if (motion && !reduceMotion() && $.animate && $.firstElementChild) {
+      const bounds = $.getBoundingClientRect();
+      outgoing = $.cloneNode(true);
+      outgoing.removeAttribute("id");
+      outgoing
+        .querySelectorAll("[id]")
+        .forEach((node) => node.removeAttribute("id"));
+      outgoing.classList.add("motion-outgoing");
+      outgoing.inert = true;
+      outgoing.setAttribute("aria-hidden", "true");
+      Object.assign(outgoing.style, {
+        top: bounds.top + "px",
+        left: bounds.left + "px",
+        width: bounds.width + "px",
+      });
+      $.before(outgoing);
+    }
     view = v;
     render();
     window.scrollTo(0, 0);
+    if (!outgoing) return;
+    const { duration, ...start } = motion;
+    $.classList.add("motion-incoming");
+    const animation = animate(
+      $,
+      [
+        start,
+        start.transform ? { transform: "translateX(0)" } : { opacity: 1 },
+      ],
+      duration,
+    );
+    screenAnimation = animation;
+    const cleanup = () => {
+      outgoing.remove();
+      if (screenAnimation === animation) $.classList.remove("motion-incoming");
+    };
+    if (animation) animation.finished.then(cleanup, cleanup);
+    else cleanup();
   };
+  function changeColors(selector, update, duration) {
+    const nodes = [...document.querySelectorAll(selector)];
+    const colors = nodes.map((node) => getComputedStyle(node).backgroundColor);
+    update();
+    document.querySelectorAll(selector).forEach((node, i) => {
+      const color = getComputedStyle(node).backgroundColor;
+      if (colors[i] && colors[i] !== color)
+        animate(
+          node,
+          [{ backgroundColor: colors[i] }, { backgroundColor: color }],
+          duration,
+        );
+    });
+  }
+  function changePreset() {
+    const previous = [...$.querySelectorAll(".preset")].map((node) => ({
+      bounds: node.getBoundingClientRect(),
+      color: getComputedStyle(node).backgroundColor,
+    }));
+    render();
+    $.querySelectorAll(".preset").forEach((node, i) => {
+      const old = previous[i];
+      const bounds = node.getBoundingClientRect();
+      if (!old) return;
+      const shift = old.bounds.top - bounds.top;
+      const color = getComputedStyle(node).backgroundColor;
+      if (shift || color !== old.color)
+        animate(
+          node,
+          [
+            {
+              transform: "translateY(" + shift + "px)",
+              backgroundColor: old.color,
+            },
+            { transform: "translateY(0)", backgroundColor: color },
+          ],
+          300,
+          "ease-in-out",
+        );
+    });
+    animate(
+      $.querySelector(".preset-detail"),
+      [{ opacity: 0 }, { opacity: 1 }],
+      300,
+      "ease-in-out",
+    );
+  }
+  function openOverlay(node, duration) {
+    node.showModal();
+    const offset = window.innerHeight - node.getBoundingClientRect().top;
+    animate(
+      node,
+      [
+        { transform: "translateY(" + offset + "px)" },
+        { transform: "translateY(0)" },
+      ],
+      duration,
+    );
+  }
   const status = document.getElementById("status");
   let toastTimer;
-  const toast = (message, kind = "error") => {
+  const toast = (message, kind = "error", motion) => {
     (dialog.open ? dialog : document.body).append(status);
     status.className = kind;
     status.querySelector("span").textContent = message;
     status.hidden = false;
+    if (motion === "slide")
+      animate(
+        status,
+        [
+          { transform: "translateX(calc(-50% - 100vw))" },
+          { transform: "translateX(-50%)" },
+        ],
+        200,
+      );
+    if (motion === "fade")
+      animate(status, [{ opacity: 0 }, { opacity: 1 }], 200);
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
       status.hidden = true;
@@ -150,7 +273,7 @@
       }
       records = [...unique.values()];
     }
-    if (view === "home" || view === "history") render();
+    if (view === "history") render();
   }
   async function saveDecision(result) {
     const owner = user?.id;
@@ -288,11 +411,22 @@
     [PRESETS[draft.cat]?.label, draft.title].filter(Boolean).join(" · ");
 
   function home() {
+    const intro = playIntro ? " intro" : "";
+    playIntro = false;
     const logo = [1, 2, 3, 4, 5]
-      .map((n) => '<img src="/assets/imgColor' + n + '.svg" alt="">')
+      .map(
+        (n) =>
+          '<img src="/assets/imgColor' +
+          n +
+          '.svg" alt="" style="--intro-offset:' +
+          (268.3125 - (n - 1) * 52.0625) +
+          'px">',
+      )
       .join("");
     return (
-      '<div class="home"><div class="logo-stack" aria-hidden="true">' +
+      '<div class="home"><div class="logo-stack' +
+      intro +
+      '" aria-hidden="true">' +
       logo +
       '</div><img class="wordmark" src="/assets/imgPickdrop.svg" alt="PICKDROP">' +
       '<div class="home-actions">' +
@@ -481,7 +615,15 @@
             .join("") +
           "</div></div>") +
       scale(selected, "score", pair) +
-      footer(action("다음", "next", selected ? "" : "disabled"))
+      footer(
+        action(
+          "다음",
+          "next",
+          selected && (pair || optionIndex === draft.options.length - 1)
+            ? ""
+            : "disabled",
+        ),
+      )
     );
   }
 
@@ -1052,7 +1194,7 @@
       created_at: new Date().toISOString(),
     };
     rememberGuest(decision);
-    go("result");
+    go("result", "inLeft");
     if (user) await saveDecision(decision);
   }
   async function createPoll() {
@@ -1199,8 +1341,7 @@
     if (view !== "vote" || current?.id !== activePoll.id) return;
     ballot = confirmed;
     editingVote = false;
-    render();
-    window.scrollTo(0, 0);
+    go("vote", updating ? undefined : "inLeft");
     if (updating) toast("투표 기록을 수정했어요", "success");
   }
   async function statsLoad() {
@@ -1209,6 +1350,8 @@
       go("account");
       return;
     }
+    const before = votes.length;
+    const sourceView = view;
     if (poll.demo) votes = read("votes", {})[poll.id] || [];
     else {
       const owner = user.id;
@@ -1217,12 +1360,33 @@
         .from("votes")
         .select("option_id,note,voter_name,created_at")
         .eq("poll_id", selected);
-      if (user?.id !== owner || poll?.id !== selected) return;
+      if (user?.id !== owner || poll?.id !== selected || view !== sourceView)
+        return;
       if (error)
         return toast("투표 결과를 불러오지 못했어요. 다시 시도해 주세요.");
       votes = data || [];
     }
-    go("stats");
+    const previous = view;
+    go(
+      "stats",
+      previous === "share"
+        ? "inLeft"
+        : previous === "notes"
+          ? "inRight"
+          : previous === "stats" && !before && votes.length
+            ? "smart"
+            : undefined,
+    );
+    if (
+      previous !== "stats" &&
+      !votes.length &&
+      new Date(poll.expires_at) > new Date()
+    ) {
+      const key = poll.id;
+      statsRefresh = setTimeout(() => {
+        if (view === "stats" && poll?.id === key && !pending) void statsLoad();
+      }, 1800);
+    }
   }
   const dialog = document.querySelector("dialog");
   let editor = null;
@@ -1254,7 +1418,7 @@
       weight: draft.weights[draft.criteria[index]] ?? 0,
     };
     paintEditor();
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) openOverlay(dialog, kind === "criterion" ? 300 : 200);
   }
   function paintEditor() {
     const isCriterion = editor.kind === "criterion";
@@ -1325,6 +1489,7 @@
       "</div></div>";
   }
   function commitEditor() {
+    const { kind, index } = editor;
     const name = editor.name.trim();
     if (!name || editor.photoLoading) return;
     if (editor.kind === "criterion") {
@@ -1351,6 +1516,17 @@
     }
     dialog.close();
     render();
+    const target =
+      kind === "criterion"
+        ? $.querySelector(".preset-detail")
+        : $.querySelectorAll('[data-act="candidate"]')[
+            view === "setup" && draft.options.length < 4 ? index + 1 : index
+          ];
+    animate(
+      target,
+      [{ opacity: 0 }, { opacity: 1 }],
+      view === "setup" ? 150 : 200,
+    );
   }
   async function uploadPhoto(file) {
     const editing = editor;
@@ -1485,7 +1661,10 @@
         deadline = "";
         step = 1;
         resetScore();
-        go(a === "friend" ? "setup" : "wizard");
+        go(
+          a === "friend" ? "setup" : "wizard",
+          a === "friend" ? "inLeft" : "smart",
+        );
       } else if (a === "cat" && draft.cat !== t.dataset.val) {
         draft.cat = t.dataset.val;
         draft.criteria = PRESETS[draft.cat].criteria.slice(
@@ -1504,7 +1683,7 @@
                 color: i ? "blue" : "pink",
               }))
             : draft.options.filter((option) => option.name);
-        render();
+        changePreset();
       } else if (a === "criteria-remove") {
         const [removed] = draft.criteria.splice(index, 1);
         delete draft.weights[removed];
@@ -1517,7 +1696,7 @@
         );
       } else if (a === "candidate") edit("candidate", index);
       else if (a === "close-dialog") dialog.close();
-      else if (a === "choose-photo") photoSheet.showModal();
+      else if (a === "choose-photo") openOverlay(photoSheet, 250);
       else if (a === "close-photo-sheet") photoSheet.close();
       else if (a === "save-dialog" && editor) commitEditor();
       else if (a === "remove-candidate" && editor) {
@@ -1526,7 +1705,11 @@
         render();
       } else if (a === "weight" && editor) {
         editor.weight = Number(t.dataset.n);
-        paintEditor();
+        changeColors(
+          '#page [data-n], dialog [data-act="weight"]',
+          paintEditor,
+          200,
+        );
       } else if (a === "back") {
         if (step === 3 && optionIndex > 0) optionIndex--;
         else if (step === 3 && criterionIndex > 0) {
@@ -1535,6 +1718,8 @@
         } else step--;
         go("wizard");
       } else if (a === "next") {
+        const pair = draft.cat === "pair";
+        let transition = "inLeft";
         if (step === 1) {
           if (!draft.cat || !draft.criteria.length)
             return toast("양식과 비교 기준을 골라 주세요.");
@@ -1543,25 +1728,45 @@
           if (!optionsReady()) return toast("후보를 두 개 이상 등록해 주세요.");
           step = 3;
           resetScore();
+          if (pair) transition = "dissolve";
         } else {
-          const pair = draft.cat === "pair";
           const selected = pair
             ? draft.comparisons[draft.criteria[criterionIndex]]
             : draft.ratings[scoreKey()];
           if (!selected) return;
-          if (!pair && optionIndex + 1 < draft.options.length) optionIndex++;
-          else if (criterionIndex + 1 < draft.criteria.length) {
-            criterionIndex++;
-            optionIndex = 0;
-          } else return await done();
+          if (!pair && optionIndex + 1 < draft.options.length) return;
+          if (criterionIndex + 1 >= draft.criteria.length) return await done();
+          criterionIndex++;
+          optionIndex = 0;
         }
-        go("wizard");
+        go("wizard", transition);
       } else if (a === "score") {
         const rating = Number(t.dataset.n);
-        if (draft.cat === "pair")
-          draft.comparisons[draft.criteria[criterionIndex]] = rating;
+        const pair = draft.cat === "pair";
+        if (pair) draft.comparisons[draft.criteria[criterionIndex]] = rating;
         else draft.ratings[scoreKey()] = rating;
-        render();
+        changeColors(
+          '.scale [data-act="score"], .bottom [data-act="next"]',
+          render,
+          pair ? 300 : 200,
+        );
+        clearTimeout(scoreAdvance);
+        if (!pair && optionIndex + 1 < draft.options.length) {
+          scoreAdvance = setTimeout(() => {
+            if (view !== "wizard" || step !== 3) return;
+            optionIndex++;
+            render();
+            animate(
+              $.querySelector(".score-cards"),
+              [
+                { transform: "translateX(176px)" },
+                { transform: "translateX(0)" },
+              ],
+              400,
+              "ease-in-out",
+            );
+          }, 600);
+        }
       } else if (a === "rescore") {
         draft = {
           ...fresh(),
@@ -1573,7 +1778,7 @@
         };
         step = 3;
         resetScore();
-        go("wizard");
+        go("wizard", "smart");
       } else if (a === "compare-tie") startCompare();
       else if (a === "confirm-compare") {
         const selected = [
@@ -1590,11 +1795,11 @@
           options: decision.options.map((o) => ({ ...o })),
         };
         deadline = "";
-        go("setup");
+        go("setup", "inLeft");
       } else if (a === "setup-back") go(view === "share" ? "setup" : "home");
       else if (a === "deadline") {
         deadline = t.dataset.val;
-        render();
+        changeColors('.chips [data-act="deadline"]', render, 200);
       } else if (a === "loginpoll" && pollReady()) {
         sessionStorage.setItem(
           "pd_resume",
@@ -1628,6 +1833,7 @@
               ? "투표 결과가 복사되었어요"
               : "투표 링크가 복사되었어요",
             "success",
+            t.classList.contains("icon-button") ? "slide" : "fade",
           );
         } catch {
           const link = $.querySelector("input[readonly]");
@@ -1659,7 +1865,7 @@
         const strip = $.querySelector(".guest-options");
         const position = strip.scrollLeft;
         vote = current.options[index].id;
-        render();
+        changeColors('.guest-card [data-act="voteselect"]', render, 150);
         $.querySelector(".guest-options").scrollLeft = position;
       } else if (a === "photo") {
         const option = current.options[index];
@@ -1682,7 +1888,7 @@
         dialog.showModal();
       } else if (a === "cast") await cast();
       else if (a === "stats") await statsLoad();
-      else if (a === "notes") go("notes");
+      else if (a === "notes") go("notes", "inLeft");
       else if (a === "my-polls") await loadOwnedPolls();
       else if (a === "more-polls") await loadOwnedPolls(true);
       else if (a === "open-poll") await openOwnedPoll(t.dataset.id);
@@ -1750,12 +1956,14 @@
           if (user?.id === session.user.id) void loadHistory(session.user.id);
         }, 0);
       }
-      if (
-        view === "home" ||
-        view === "account" ||
-        view === "history" ||
-        view === "setup"
-      )
+      if (view === "home") {
+        const control = $.querySelector(".home-account [data-act=account]");
+        if (control) {
+          control.disabled = false;
+          control.textContent = user ? "마이페이지" : "로그인";
+        }
+      }
+      if (view === "account" || view === "history" || view === "setup")
         render();
     }
   });

@@ -34,6 +34,7 @@
 }
 body {
   margin: 0;
+  overflow-x: clip;
 }
 button,
 input {
@@ -210,18 +211,24 @@ input::placeholder {
   margin-top: -1px;
   display: flex;
   flex-direction: column;
-  animation: stack-in 350ms ease-out both;
+  z-index: 0;
 }
-@keyframes stack-in {
+.wordmark {
+  z-index: 1;
+}
+.logo-stack.intro img {
+  animation: intro-stack 900ms cubic-bezier(0.2, 0.75, 0.25, 1) 400ms both;
+}
+@keyframes intro-stack {
   from {
-    opacity: 0;
+    transform: translateY(var(--intro-offset));
   }
   to {
-    opacity: 1;
+    transform: translateY(0);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .logo-stack {
+  .logo-stack.intro img {
     animation: none;
   }
 }
@@ -937,4 +944,28 @@ fieldset .scale {
 .owned-poll-topic {
   color: var(--gray);
   font-weight: 500;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .home-button,
+  .bottom .button {
+    transition: background-color 150ms ease-out;
+  }
+}
+.home-button:active,
+.bottom .secondary:active {
+  background: #e5e3df;
+}
+.bottom .button:not(.secondary, .text-button, :disabled):active {
+  background: #53514f;
+}
+.motion-outgoing {
+  position: fixed;
+  margin: 0;
+  pointer-events: none;
+  background: var(--background);
+}
+.motion-incoming {
+  position: relative;
+  background: var(--background);
 }
