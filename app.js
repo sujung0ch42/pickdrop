@@ -216,7 +216,7 @@
   const muted = (value) => '<p class="muted">' + esc(value) + "</p>";
   const validPhoto = (value) =>
     typeof value === "string" &&
-    /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(value);
+    /^data:image\/(?:jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value);
   const color = (option, index) =>
     palettes.includes(option.color)
       ? option.color
@@ -1018,11 +1018,16 @@
   const dialog = document.querySelector("dialog");
   let editor = null;
   const photoSheet = document.getElementById("photo-sheet");
-  photoSheet.addEventListener("change", (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
+  photoSheet.addEventListener("change", async (event) => {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) return;
     photoSheet.close();
-    void uploadPhoto(file);
+    try {
+      await uploadPhoto(file);
+    } finally {
+      input.value = "";
+    }
   });
   photoSheet.addEventListener("click", (event) => {
     if (event.target === photoSheet) photoSheet.close();
@@ -1049,6 +1054,11 @@
       : Boolean(draft.options[editor.index]?.name);
     const title =
       (isCriterion ? "기준 " : "후보 ") + (existing ? "수정" : "추가");
+    const photoLabel = editor.photoLoading
+      ? "사진을 불러오는 중…"
+      : editor.photo
+        ? "사진 바꾸기"
+        : "사진 추가하기 (선택)";
     const content = isCriterion
       ? "<fieldset><legend>" +
         (existing ? "중요도 (수정 가능)" : "중요도") +
@@ -1056,10 +1066,9 @@
         scale(editor.weight, "weight") +
         "</fieldset>"
       : action(
-          (editor.photo ? "사진 바꾸기" : "사진 추가하기 (선택)") +
-            icon("IconNext"),
+          photoLabel + icon("IconNext"),
           "choose-photo",
-          "",
+          editor.photoLoading ? "disabled" : "",
           "photo-input",
         ) +
         (editor.photo
@@ -1098,13 +1107,17 @@
       action(
         existing ? "수정하기" : "추가하기",
         "save-dialog",
-        editor.name.trim() && (!isCriterion || editor.weight) ? "" : "disabled",
+        editor.name.trim() &&
+          !editor.photoLoading &&
+          (!isCriterion || editor.weight)
+          ? ""
+          : "disabled",
       ) +
       "</div></div>";
   }
   function commitEditor() {
     const name = editor.name.trim();
-    if (!name) return;
+    if (!name || editor.photoLoading) return;
     if (editor.kind === "criterion") {
       const old = draft.criteria[editor.index];
       if (!editor.weight) return;
@@ -1131,27 +1144,42 @@
     render();
   }
   async function uploadPhoto(file) {
-    if (!file) return;
-    if (file.size > 15_000_000) return toast("15MB 이하의 사진을 골라 주세요.");
     const editing = editor;
+    if (!editing || !dialog.open || editing.photoLoading) return;
+    editing.photoLoading = true;
+    paintEditor();
+    const url = URL.createObjectURL(file);
+    let errorMessage = "";
     try {
-      const bitmap = await createImageBitmap(file);
-      const fit = Math.min(1, 480 / Math.max(bitmap.width, bitmap.height));
+      const image = new Image();
+      await new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = reject;
+        image.src = url;
+      });
+      const fit = Math.min(
+        1,
+        480 / Math.max(image.naturalWidth, image.naturalHeight),
+      );
       const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(bitmap.width * fit));
-      canvas.height = Math.max(1, Math.round(bitmap.height * fit));
-      canvas
-        .getContext("2d")
-        .drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      bitmap.close();
-      if (editor !== editing || !dialog.open) return;
-      const photo = canvas.toDataURL("image/webp", 0.78);
-      if (!validPhoto(photo))
-        return toast("이 브라우저에서 사진을 처리하지 못했어요.");
-      editor.photo = photo;
-      paintEditor();
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * fit));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * fit));
+      const context = canvas.getContext("2d", { alpha: false });
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const photo = canvas.toDataURL("image/jpeg", 0.82);
+      if (!validPhoto(photo)) throw new Error("Photo encoding failed");
+      editing.photo = photo;
     } catch {
-      toast("사진을 열 수 없어요. 다른 파일을 골라 주세요.");
+      errorMessage = "사진을 열 수 없어요. JPEG 또는 PNG 사진을 골라 주세요.";
+    } finally {
+      URL.revokeObjectURL(url);
+      editing.photoLoading = false;
+      if (editor === editing && dialog.open) {
+        paintEditor();
+        if (errorMessage) toast(errorMessage);
+      }
     }
   }
   dialog.addEventListener("close", () => {
@@ -1180,7 +1208,9 @@
     if (key === "editor-name" && editor) {
       editor.name = e.target.value;
       dialog.querySelector('[data-act="save-dialog"]').disabled =
-        !editor.name.trim() || (editor.kind === "criterion" && !editor.weight);
+        !editor.name.trim() ||
+        editor.photoLoading ||
+        (editor.kind === "criterion" && !editor.weight);
     }
   });
   function resetScore() {
