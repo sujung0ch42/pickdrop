@@ -1,5 +1,9 @@
 (() => {
   "use strict";
+  const usernameDomain = "@users.pickdrop.invalid";
+  const usernamePattern = /^[a-z0-9_]{3,24}$/;
+  const signupGatewayKey =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpiY2theWloYWdkZnV1dWV1a3F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ5NjcxNjgsImV4cCI6MjExMDU0MzE2OH0.eZt_tn3wqOj3Vzu5X92AVuVMoN98ZjKOmxP__pyKefM";
   const supa = window.supabase.createClient(
     "https://jbckayihagdfuuueukqz.supabase.co",
     "sb_publishable_Om_4Zrkj1OtUxQPQ1rVPtA_MoWL0kUx",
@@ -1014,9 +1018,13 @@
         back: isLogin ? "home" : isRecovery ? null : "auth-login",
       }) +
       (isSignup
-        ? muted("가입 후 받은 이메일에서 주소를 확인해 주세요.")
+        ? muted(
+            "아이디와 비밀번호를 정하면 바로 시작할 수 있어요. 아이디 계정은 이메일로 비밀번호를 찾을 수 없으니 비밀번호를 기억해 주세요.",
+          )
         : isReset
-          ? muted("가입한 이메일로 재설정 링크를 보내드려요.")
+          ? muted(
+              "이메일 계정만 재설정할 수 있어요. 가입한 이메일로 링크를 보내드려요.",
+            )
           : "") +
       (authMessage
         ? '<p class="auth-message" role="status">' + esc(authMessage) + "</p>"
@@ -1024,9 +1032,18 @@
       '<form class="auth-form">' +
       (isRecovery
         ? ""
-        : '<label class="field">이메일<input name="email" type="email" value="' +
+        : '<label class="field">' +
+          (isSignup ? "아이디" : isReset ? "이메일" : "아이디 또는 이메일") +
+          '<input name="email" type="' +
+          (isReset ? "email" : "text") +
+          '" value="' +
           esc(authEmail) +
-          '" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required></label>') +
+          '" autocomplete="username"' +
+          (isReset ? ' inputmode="email"' : "") +
+          (isSignup
+            ? ' placeholder="영문 소문자·숫자·밑줄 3~24자" minlength="3" maxlength="24"'
+            : "") +
+          ' autocapitalize="off" spellcheck="false" required></label>') +
       (isReset
         ? ""
         : '<label class="field">' +
@@ -1064,7 +1081,11 @@
     if (!user || authMode === "recovery") return authForm();
     return (
       header("마이페이지", { back: "home" }) +
-      muted(user.email) +
+      muted(
+        user.email?.endsWith(usernameDomain)
+          ? user.email.slice(0, -usernameDomain.length)
+          : user.email,
+      ) +
       '<div class="account-actions">' +
       action("내 선택 기록", "history") +
       action("내가 만든 투표", "my-polls", "", "secondary") +
@@ -1075,13 +1096,18 @@
   function openAuth(mode, message = "") {
     authEmail =
       $.querySelector(".auth-form [name=email]")?.value.trim() ?? authEmail;
+    if (
+      (mode === "signup" && authEmail.includes("@")) ||
+      (mode === "reset" && !authEmail.includes("@"))
+    )
+      authEmail = "";
     authMode = mode;
     authMessage = message;
     go("account");
   }
   function showAuthError(error, mode) {
     const message = {
-      invalid_credentials: "이메일 또는 비밀번호를 확인해 주세요.",
+      invalid_credentials: "아이디·이메일 또는 비밀번호를 확인해 주세요.",
       email_not_confirmed: "먼저 가입 확인 이메일의 링크를 열어 주세요.",
       weak_password: "더 안전한 비밀번호를 사용해 주세요.",
       over_email_send_rate_limit:
@@ -1116,26 +1142,48 @@
     status.hidden = true;
     try {
       if (mode === "login") {
+        const accountEmail = email.includes("@")
+          ? email
+          : email.toLowerCase() + usernameDomain;
         const { error } = await supa.auth.signInWithPassword({
-          email,
+          email: accountEmail,
           password,
         });
         if (error) return showAuthError(error, mode);
       } else if (mode === "signup") {
-        const { data, error } = await supa.auth.signUp({
-          email,
-          password,
-          options: { emailRedirectTo: authRedirect() },
-        });
+        const username = email.toLowerCase();
+        if (!usernamePattern.test(username))
+          return toast(
+            "아이디는 영문 소문자·숫자·밑줄로 3~24자를 입력해 주세요.",
+          );
         if (
-          error &&
-          !["user_already_exists", "email_exists"].includes(error.code)
+          password.length < 8 ||
+          new TextEncoder().encode(password).length > 72
         )
-          return showAuthError(error, mode);
-        if (!data?.session)
+          return toast("비밀번호를 8자 이상, 72바이트 이하로 입력해 주세요.");
+        const { data, error } = await supa.functions.invoke("pickdrop-signup", {
+          headers: { Authorization: "Bearer " + signupGatewayKey },
+          body: { username, password },
+        });
+        if (!data?.created || error) {
+          const problem = await error?.context?.json?.().catch(() => null);
+          return toast(
+            {
+              username_taken: "이미 사용 중인 아이디예요.",
+              weak_password: "더 안전한 비밀번호를 사용해 주세요.",
+              rate_limited: "가입 요청이 많아요. 잠시 후 다시 시도해 주세요.",
+            }[problem?.error] ??
+              "가입을 완료하지 못했어요. 잠시 후 다시 시도해 주세요.",
+          );
+        }
+        const login = await supa.auth.signInWithPassword({
+          email: username + usernameDomain,
+          password,
+        });
+        if (login.error)
           openAuth(
             "login",
-            "가입 확인 이메일을 확인해 주세요. 이미 가입했다면 로그인할 수 있어요.",
+            "가입했어요. 방금 만든 아이디와 비밀번호로 로그인해 주세요.",
           );
       } else if (mode === "reset") {
         const { error } = await supa.auth.resetPasswordForEmail(email, {
