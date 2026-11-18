@@ -894,3 +894,6 @@ fieldset .scale {
   font-size: 16px;
   font-weight: 600;
 }
+.own-note p {
+  white-space: pre-wrap;
+}

@@ -71,6 +71,8 @@
     poll = null,
     current = null,
     vote = "",
+    ballot = null,
+    editingVote = false,
     note = "",
     voter = "",
     votes = [],
@@ -637,8 +639,9 @@
         '<p class="center">투표를 찾을 수 없습니다.</p>' +
         footer(action("홈으로", "home"))
       );
-    const voted = read("voted_" + current.id, false);
-    if (voted) {
+    const closed = new Date(current.expires_at) <= new Date();
+    const voted = ballot?.option_id ?? read("voted_" + current.id, false);
+    if (voted && (!editingVote || closed)) {
       const selected = current.options.find((option) => option.id === voted);
       const localRanks = current.demo
         ? pollRanks(current, read("votes", {})[current.id] ?? [])
@@ -654,10 +657,20 @@
             rankList(localRanks) +
             "</section>"
           : "") +
-        footer(action("나도 고민 올리기", "home"))
+        (ballot?.note
+          ? '<section class="result-ranks own-note"><h2>내가 남긴 훈수</h2>' +
+            muted(ballot.note) +
+            "</section>"
+          : "") +
+        footer(
+          ballot && !closed
+            ? action("투표·훈수 수정", "edit-vote", "", "secondary")
+            : "",
+          action("나도 고민 올리기", "home"),
+        )
       );
     }
-    if (new Date(current.expires_at) <= new Date())
+    if (closed)
       return (
         header("투표 종료!") +
         muted("마감된 투표예요.") +
@@ -665,8 +678,12 @@
       );
     return (
       header(
-        current.owner_name ? current.owner_name + " 님의 고민" : "친구의 고민",
-        { progress: 50 },
+        editingVote
+          ? "내 투표 수정"
+          : current.owner_name
+            ? current.owner_name + " 님의 고민"
+            : "친구의 고민",
+        { progress: 50, back: editingVote ? "cancel-vote" : null },
       ) +
       '<h3 class="poll-topic">' +
       esc(current.topic) +
@@ -701,7 +718,13 @@
         : "") +
       input("나의 훈수 (선택)", "note", note, "크흠...", 200) +
       input("닉네임 (선택)", "voter", voter, "익명의 외계인", 30) +
-      footer(action("투표하기", "cast", vote ? "" : "disabled"))
+      footer(
+        action(
+          editingVote ? "수정 저장하기" : "투표하기",
+          "cast",
+          vote ? "" : "disabled",
+        ),
+      )
     );
   }
   function pollRanks(item, entries) {
@@ -942,9 +965,26 @@
     }
     go("share");
   }
+  async function fetchBallot(poll, clientKey) {
+    if (!uuid.test(clientKey ?? "")) return { data: null, error: null };
+    if (poll.demo) {
+      const entries = read("votes", {})[poll.id] ?? [];
+      return {
+        data: entries.find((entry) => entry.client_key === clientKey) ?? null,
+        error: null,
+      };
+    }
+    return supa.rpc("pickdrop_vote_receipt", {
+      p_poll_id: poll.id,
+      p_client_key: clientKey,
+    });
+  }
+
   async function openpoll(key) {
     view = "vote";
     current = null;
+    ballot = null;
+    editingVote = false;
     vote = "";
     note = "";
     voter = "";
@@ -952,51 +992,95 @@
     loading = true;
     render();
     const demo = uuid.test(key) ? read("polls", {})[key] : null;
-    if (demo) current = demo;
-    else if (uuid.test(key)) {
-      const { data, error } = await supa.rpc("pickdrop_public_poll", {
-        p_poll_id: key,
-      });
-      if (new URL(location.href).searchParams.get("poll") !== key) return;
-      current = data;
-      pollError = Boolean(error);
-    }
+    const result =
+      demo || !uuid.test(key)
+        ? { data: demo, error: null }
+        : await supa.rpc("pickdrop_public_poll", { p_poll_id: key });
+    const receipt = result.data
+      ? await fetchBallot(result.data, read("vote_key_" + key, null))
+      : { data: null, error: null };
+    if (
+      view !== "vote" ||
+      new URL(location.href).searchParams.get("poll") !== key
+    )
+      return;
+    current = result.data;
+    pollError = Boolean(result.error || receipt.error);
+    ballot = receipt.data;
     loading = false;
-    if (view === "vote") render();
+    render();
   }
   async function cast() {
     if (!vote || !current) return toast("선택지를 골라 주세요.");
-    const key = "vote_key_" + current.id;
-    const clientKey = read(key, null) ?? id();
+    const activePoll = current;
+    const updating = editingVote;
+    const key = "vote_key_" + activePoll.id;
+    const savedKey = read(key, null);
+    if (updating && !uuid.test(savedKey ?? ""))
+      return toast("기존 투표를 확인할 수 없어요.");
+    const clientKey = uuid.test(savedKey ?? "") ? savedKey : id();
     save(key, clientKey);
-    const data = {
-      poll_id: current.id,
+    const receipt = {
       option_id: vote,
       note: note.trim() || null,
       voter_name: voter.trim() || null,
-      client_key: clientKey,
     };
-    if (current.demo) {
+    const payload = {
+      p_poll_id: activePoll.id,
+      p_option_id: receipt.option_id,
+      p_note: receipt.note,
+      p_voter_name: receipt.voter_name,
+      p_client_key: clientKey,
+    };
+    let confirmed = receipt;
+    if (activePoll.demo) {
+      if (new Date(activePoll.expires_at) <= new Date())
+        return toast("마감된 투표예요.");
       const all = read("votes", {});
-      all[current.id] = [...(all[current.id] || []), data];
+      const entries = all[activePoll.id] ?? [];
+      const index = entries.findIndex(
+        (entry) => entry.client_key === clientKey,
+      );
+      const entry = {
+        ...receipt,
+        client_key: clientKey,
+        poll_id: activePoll.id,
+      };
+      if (index >= 0) entries[index] = entry;
+      else if (updating) return toast("기존 투표를 확인할 수 없어요.");
+      else entries.push(entry);
+      all[activePoll.id] = entries;
       save("votes", all);
     } else {
-      const { error } = await supa.rpc("pickdrop_cast_vote", {
-        p_poll_id: data.poll_id,
-        p_option_id: data.option_id,
-        p_note: data.note,
-        p_voter_name: data.voter_name,
-        p_client_key: data.client_key,
-      });
-      if (error && error.code !== "23505")
+      const { data, error } = await supa.rpc(
+        updating ? "pickdrop_vote_receipt" : "pickdrop_cast_vote",
+        payload,
+      );
+      if (error && !updating && error.code === "23505") {
+        const existing = await fetchBallot(activePoll, clientKey);
+        if (existing.error || !existing.data)
+          return toast("기존 투표를 확인할 수 없어요. 다시 시도해 주세요.");
+        confirmed = existing.data;
+      } else if (error) {
+        if (error.message === "Poll is closed")
+          return toast("마감된 투표예요.");
         return toast(
-          error.message === "Poll is closed"
-            ? "마감된 투표예요."
+          updating
+            ? "수정을 저장하지 못했어요. 다시 시도해 주세요."
             : "투표를 기록하지 못했어요. 다시 시도해 주세요.",
         );
+      } else if (updating) {
+        if (!data) return toast("기존 투표를 확인할 수 없어요.");
+        confirmed = data;
+      }
     }
-    save("voted_" + data.poll_id, data.option_id);
+    save("voted_" + activePoll.id, confirmed.option_id);
+    if (view !== "vote" || current?.id !== activePoll.id) return;
+    ballot = confirmed;
+    editingVote = false;
     render();
+    window.scrollTo(0, 0);
+    if (updating) toast("투표 기록을 수정했어요", "success");
   }
   async function statsLoad() {
     if (!poll) return;
@@ -1433,7 +1517,20 @@
         await openpoll(poll.id);
       } else if (a === "retryvote")
         await openpoll(new URL(location.href).searchParams.get("poll"));
-      else if (a === "voteselect") {
+      else if (a === "edit-vote" && ballot && current) {
+        if (new Date(current.expires_at) <= new Date()) {
+          render();
+          return toast("마감된 투표예요.");
+        }
+        editingVote = true;
+        vote = ballot.option_id;
+        note = ballot.note ?? "";
+        voter = ballot.voter_name ?? "";
+        go("vote");
+      } else if (a === "cancel-vote") {
+        editingVote = false;
+        go("vote");
+      } else if (a === "voteselect") {
         const strip = $.querySelector(".guest-options");
         const position = strip.scrollLeft;
         vote = current.options[index].id;
