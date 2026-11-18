@@ -21,5 +21,14 @@
       </button>
     </div>
     <dialog aria-label="입력 팝업"></dialog>
+    <dialog id="photo-sheet" aria-label="사진 선택">
+      <label class="photo-input"
+        >사진 찍기<input type="file" accept="image/*" capture="environment"
+      /></label>
+      <label class="photo-input"
+        >사진 보관함<input type="file" accept="image/*"
+      /></label>
+      <button type="button" data-act="close-photo-sheet">취소</button>
+    </dialog>
   </body>
 </html>

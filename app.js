@@ -1017,6 +1017,16 @@
   }
   const dialog = document.querySelector("dialog");
   let editor = null;
+  const photoSheet = document.getElementById("photo-sheet");
+  photoSheet.addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    photoSheet.close();
+    void uploadPhoto(file);
+  });
+  photoSheet.addEventListener("click", (event) => {
+    if (event.target === photoSheet) photoSheet.close();
+  });
   function edit(kind, index, suggestion = "") {
     const entry = kind === "candidate" ? draft.options[index] : null;
     editor = {
@@ -1040,13 +1050,18 @@
     const title =
       (isCriterion ? "기준 " : "후보 ") + (existing ? "수정" : "추가");
     const content = isCriterion
-      ? "<fieldset><legend>중요도</legend>" +
+      ? "<fieldset><legend>" +
+        (existing ? "중요도 (수정 가능)" : "중요도") +
+        "</legend>" +
         scale(editor.weight, "weight") +
         "</fieldset>"
-      : '<label class="photo-input">' +
-        (editor.photo ? "사진 바꾸기" : "사진 추가하기 (선택)") +
-        icon("IconNext") +
-        '<input type="file" accept="image/*" data-in="picture"></label>' +
+      : action(
+          (editor.photo ? "사진 바꾸기" : "사진 추가하기 (선택)") +
+            icon("IconNext"),
+          "choose-photo",
+          "",
+          "photo-input",
+        ) +
         (editor.photo
           ? '<img class="upload-preview" src="' +
             editor.photo +
@@ -1064,20 +1079,24 @@
       ) +
       "</div>" +
       '<div class="modal-body">' +
-      input(
-        isCriterion ? "기준 이름" : "후보 이름",
-        "editor-name",
-        editor.name,
-        "이름을 적어주세요!",
-        isCriterion ? 24 : 35,
-      ) +
+      (isCriterion && existing
+        ? '<label class="field">기준 이름 (수정 불가)<input readonly value="' +
+          esc(editor.name) +
+          '"></label>'
+        : input(
+            isCriterion ? "기준 이름" : "후보 이름",
+            "editor-name",
+            editor.name,
+            "이름을 적어주세요!",
+            isCriterion ? 24 : 35,
+          )) +
       content +
       '<div class="modal-actions">' +
       (existing && !isCriterion && draft.cat !== "pair"
         ? action("후보 삭제", "remove-candidate", "", "text-button")
         : "") +
       action(
-        existing ? "저장하기" : "추가하기",
+        existing ? "수정하기" : "추가하기",
         "save-dialog",
         editor.name.trim() && (!isCriterion || editor.weight) ? "" : "disabled",
       ) +
@@ -1163,9 +1182,6 @@
       dialog.querySelector('[data-act="save-dialog"]').disabled =
         !editor.name.trim() || (editor.kind === "criterion" && !editor.weight);
     }
-  });
-  dialog.addEventListener("change", (e) => {
-    if (e.target.dataset.in === "picture") void uploadPhoto(e.target.files[0]);
   });
   function resetScore() {
     criterionIndex = 0;
@@ -1262,6 +1278,8 @@
         );
       } else if (a === "candidate") edit("candidate", index);
       else if (a === "close-dialog") dialog.close();
+      else if (a === "choose-photo") photoSheet.showModal();
+      else if (a === "close-photo-sheet") photoSheet.close();
       else if (a === "save-dialog" && editor) commitEditor();
       else if (a === "remove-candidate" && editor) {
         draft.options.splice(editor.index, 1);

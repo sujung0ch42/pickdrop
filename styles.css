@@ -16,7 +16,7 @@
   --orange: #ffaa45;
   --green: #8ac56a;
   --blue: #65bae8;
-  --red: #b23d43;
+  --red: #e66464;
   --success: #5ed06b;
   --pad: 24px;
   --radius: 10px;
@@ -854,4 +854,37 @@ fieldset .scale {
 }
 .setup .form-heading {
   margin-bottom: 12px;
+}
+
+.modal-body .field input[readonly] {
+  background: var(--light);
+  color: var(--gray);
+  border-color: #e5e3df;
+}
+.modal-body .photo-input {
+  min-height: 37px;
+  border: 0;
+  color: var(--ink);
+  font-weight: 500;
+}
+#photo-sheet {
+  width: min(300px, calc(100% - 48px));
+  padding: 13px 14px;
+  border-radius: 36px;
+  background: #f0f0f0;
+}
+#photo-sheet[open] {
+  display: grid;
+  gap: 8px;
+}
+#photo-sheet .photo-input,
+#photo-sheet button {
+  justify-content: center;
+  min-height: 48px;
+  border: 0;
+  border-radius: 99px;
+  background: #d9d9d9;
+  color: #111;
+  font-size: 16px;
+  font-weight: 600;
 }
