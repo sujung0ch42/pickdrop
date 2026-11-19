@@ -371,7 +371,9 @@
     const content =
       (validPhoto(option.photo)
         ? '<img class="candidate-photo" src="' + option.photo + '" alt="">'
-        : "") +
+        : !add && !option.name?.startsWith("+ ")
+          ? '<div class="candidate-photo candidate-placeholder" aria-hidden="true"><img src="/assets/imgPickdrop.svg" alt=""></div>'
+          : "") +
       "<span>" +
       esc(option.label ?? option.name) +
       "</span>";
@@ -395,19 +397,29 @@
     '<ol class="ranks">' +
     options
       .map(
-        ({ rank, label, name }) =>
-          "<li><span>" + rank + "위</span>" + esc(label ?? name) + "</li>",
+        ({ rank, label, name, detail }) =>
+          "<li><span>" +
+          rank +
+          "위</span>" +
+          esc(label ?? name) +
+          (detail ? " " + esc(detail) : "") +
+          "</li>",
       )
       .join("") +
     "</ol>";
-  const pick = (option, index, caption = "") =>
+  const pick = (
+    option,
+    index,
+    caption = "",
+    summary = option.name ?? option.label,
+  ) =>
     '<div class="winner"><div class="pick-card">' +
     card(option, index) +
     '<span class="stamp">Pick!</span></div>' +
     '<div class="winner-name"><small>PICKDROP</small>' +
     (caption ? "<small>" + caption + "</small>" : "") +
     "<strong>" +
-    esc(option.name ?? option.label) +
+    esc(summary) +
     "</strong></div></div>";
   const optionsReady = () =>
     draft.options.length >= 2 &&
@@ -438,12 +450,19 @@
       '</div><img class="wordmark" src="/assets/imgPickdrop.svg" alt="PICKDROP">' +
       '<div class="home-actions">' +
       action(
-        icon("IconPerson") + "나 혼자 결정하기",
+        icon("IconPerson") +
+          "<span>나 혼자 결정하기</span><small>고민되는 선택지를 하나씩<br>비교해 보세요</small>",
         "start",
         "",
         "home-button",
       ) +
-      action(icon("Group") + "친구에게 물어보기", "friend", "", "home-button") +
+      action(
+        icon("Group") +
+          "<span>친구에게 물어보기</span><small>친구들의 의견을 모아<br>결정해 보세요</small>",
+        "friend",
+        "",
+        "home-button",
+      ) +
       "</div>" +
       '<div class="home-account">' +
       action(
@@ -634,6 +653,40 @@
     );
   }
 
+  function pairScoreSummary(result, chosen, runnerUp) {
+    const difference = Math.abs(chosen.weighted - runnerUp.weighted);
+    const comparisons = result.comparisons ?? {};
+    const side = result.options[0]?.id === chosen.id ? -1 : 1;
+    let strongest;
+    let advantage = 0;
+    for (const criterion of result.criteria ?? []) {
+      const score = comparisons[criterion];
+      if (!Number.isFinite(score)) continue;
+      const gap = side * (2 * score - 6) * (result.weights?.[criterion] ?? 3);
+      if (gap > advantage) {
+        advantage = gap;
+        strongest = criterion;
+      }
+    }
+    const description =
+      difference === 1
+        ? "‘" + chosen.name + "’의 아슬아슬한 승리!"
+        : strongest
+          ? "‘" +
+            chosen.name +
+            "’ 선택지가 ‘" +
+            strongest +
+            "’ 기준에서 많이 앞섰어요!"
+          : "";
+    return (
+      '<section class="pair-summary"><h2>점수 차이는?</h2><h3>' +
+      difference +
+      "점!</h3>" +
+      (description ? muted(description) : "") +
+      "</section>"
+    );
+  }
+
   function result() {
     if (!decision)
       return header("결과가 나왔어요") + footer(action("홈으로", "home"));
@@ -664,13 +717,21 @@
             '<span class="stamp">Pick!</span></div>' +
             ranks.map((option) => card(option, index(option))).join("") +
             "</div>"
-          : pick(chosen, index(chosen), "1위")) +
+          : pick(chosen, index(chosen), "1위", chosen.weighted + "점")) +
       (!pair
         ? '<section class="result-ranks"><h2>다른 후보 순위</h2>' +
           muted("다음 기회에") +
-          rankList(ranks.map((option, i) => ({ ...option, rank: i + 2 }))) +
+          rankList(
+            ranks.map((option, i) => ({
+              ...option,
+              rank: i + 2,
+              detail: "(" + option.weighted + "점)",
+            })),
+          ) +
           "</section>"
-        : "") +
+        : chosen && ranks.length
+          ? pairScoreSummary(decision, chosen, ranks[0])
+          : "") +
       footer(
         '<div class="split">' +
           action(
@@ -796,18 +857,20 @@
     const voted = ballot?.option_id ?? read("voted_" + current.id, false);
     if (voted && (!editingVote || closed)) {
       const selected = current.options.find((option) => option.id === voted);
-      const localRanks = current.demo
-        ? pollRanks(current, read("votes", {})[current.id] ?? [])
-        : [];
+      const counts = current.demo
+        ? tally(read("votes", {})[current.id] ?? [])
+        : ballot?.counts;
+      const ranks = counts ? pollRanks(current, counts) : [];
       return (
         header("투표 완료!", { progress: 100 }) +
         (selected
           ? muted("내가 고른 후보") +
             pick(selected, current.options.indexOf(selected))
           : muted("의견을 전달했어요.")) +
-        (localRanks.length
-          ? '<section class="result-ranks"><h2>전체 후보 순위</h2>' +
-            rankList(localRanks) +
+        (ranks.length
+          ? '<section class="result-ranks guest-ranks"><h2>전체 후보 순위</h2>' +
+            muted(closed ? "투표가 종료됐어요" : "투표는 진행 중!") +
+            rankList(ranks) +
             "</section>"
           : "") +
         (ballot?.note
@@ -880,14 +943,20 @@
       )
     );
   }
-  function pollRanks(item, entries) {
+  function tally(entries) {
+    return entries.reduce((counts, entry) => {
+      counts[entry.option_id] = (counts[entry.option_id] ?? 0) + 1;
+      return counts;
+    }, Object.create(null));
+  }
+  function pollRanks(item, counts) {
     let previous = -1,
       rank = 0;
     return item.options
       .map((option, i) => ({
         ...option,
         index: i,
-        count: entries.filter((entry) => entry.option_id === option.id).length,
+        count: Number(counts[option.id]) || 0,
       }))
       .sort((a, b) => b.count - a.count)
       .map((option, i) => {
@@ -898,7 +967,7 @@
   }
   function stats() {
     const ended = new Date(poll.expires_at) <= new Date();
-    const ranked = pollRanks(poll, votes);
+    const ranked = pollRanks(poll, tally(votes));
     const top = ranked.filter((option) => option.rank === 1 && option.count);
     const notes = action(
       "친구들이 둔 훈수와 선택지 확인하기 " + icon("IconNext"),
@@ -934,13 +1003,22 @@
       (ended && top.length
         ? muted("우리의 선택은...") +
           (top.length === 1
-            ? pick(top[0], top[0].index, "1위")
+            ? pick(
+                top[0],
+                top[0].index,
+                "1위",
+                top[0].label + " (" + top[0].count + "표)",
+              )
             : '<div class="winner ties">' +
               top.map((o) => card(o, o.index)).join("") +
               "</div>") +
           '<section class="result-ranks"><h2>다른 후보 순위</h2>' +
           muted("다음 기회에") +
-          rankList(ranked.filter((o) => o.rank > 1)) +
+          rankList(
+            ranked
+              .filter((o) => o.rank > 1)
+              .map((o) => ({ ...o, detail: "(" + o.count + "표)" })),
+          ) +
           "</section>" +
           notes
         : intro +
@@ -1533,6 +1611,9 @@
       } else if (updating) {
         if (!data) return toast("기존 투표를 확인할 수 없어요.");
         confirmed = data;
+      } else {
+        const updated = await fetchBallot(activePoll, clientKey);
+        confirmed = updated.data ?? receipt;
       }
     }
     save("voted_" + activePoll.id, confirmed.option_id);
@@ -1768,6 +1849,8 @@
   dialog.addEventListener("close", () => {
     document.body.append(status);
     status.hidden = true;
+    dialog.classList.remove("photo-viewer");
+    dialog.setAttribute("aria-label", "입력 팝업");
     editor = null;
   });
   dialog.addEventListener("click", (event) => {
@@ -2011,7 +2094,7 @@
           ? [
               "PICKDROP · " + poll.topic,
               votes.length ? votes.length + "명 참여" : "받은 투표가 없어요",
-              ...pollRanks(poll, votes)
+              ...pollRanks(poll, tally(votes))
                 .filter((option) => option.count)
                 .map(
                   (option) =>
@@ -2068,12 +2151,12 @@
       } else if (a === "photo") {
         const option = current.options[index];
         if (!validPhoto(option?.photo)) return;
+        dialog.classList.add("photo-viewer");
+        dialog.setAttribute("aria-label", option.label + " 사진");
         dialog.innerHTML =
-          '<div class="modal-header"><h2>' +
-          esc(option.label) +
-          "</h2>" +
+          '<div class="photo-viewer-controls">' +
           action(
-            icon("IconClose"),
+            icon("PhotoClose"),
             "close-dialog",
             'aria-label="닫기"',
             "icon-button",
